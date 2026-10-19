@@ -5,15 +5,22 @@
   "installCommand": "bun install",
   "rewrites": [
     {
+      "source": "/relay",
+      "destination": "https://knowless-relay.em-eieiron.workers.dev/relay"
+    },
+    {
       "source": "/relay/:path*",
       "destination": "https://knowless-relay.em-eieiron.workers.dev/relay/:path*"
     }
   ],
   "headers": [
     {
-      "source": "/relay/:path*",
+      "source": "/relay(.*)",
       "headers": [
-        { "key": "Cache-Control", "value": "no-store" }
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        }
       ]
     }
   ]
