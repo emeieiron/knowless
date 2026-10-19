@@ -1,0 +1,191 @@
+/* Spookly — global styles */
+
+/* Arc Light tokens */
+:root {
+  --bg: #ffffff;
+  --bg-gradient: linear-gradient(180deg, #f3f4f8 0%, #faf9fc 60%, #f5f3f0 100%);
+  --surface: rgba(255, 255, 255, 0.80);
+  --surface-strong: rgba(255, 255, 255, 0.96);
+  --surface-muted: #f4f4f7;
+  --ink: #122d45;
+  --ink-2: #334155;
+  --muted: #6b6580;
+  --subtle: #8a849c;
+  --border: rgba(18, 45, 69, 0.10);
+  --border-strong: rgba(18, 45, 69, 0.30);
+  --accent: #122d45;
+  --accent-hover: #1a4870;
+  --focus: #85b1ed;
+  --success: #1a8047;
+  --danger: #ba2b4c;
+  --radius: 14px;
+}
+
+/* Tailwind base */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Body */
+body {
+  font-family: 'DM Sans', sans-serif;
+  background: var(--bg-gradient);
+  min-height: 100dvh;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.display {
+  font-family: 'Space Grotesk', sans-serif;
+  letter-spacing: -0.03em;
+}
+
+.mono {
+  font-family: 'JetBrains Mono', Menlo, monospace;
+}
+
+/* Ghost animations — from visual reference */
+.ghost {
+  transform: translate(0);
+  transform-origin: 50% 100%;
+}
+.ghost-eye {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.ghost-blink .ghost-eye {
+  animation: ghost-blink 200ms ease-in-out;
+}
+.ghost-blink-twice .ghost-eye {
+  animation: ghost-blink-twice 460ms ease-in-out;
+}
+@media (hover: hover) {
+  .ghost-stage:has([data-slot="button"]:hover) .ghost {
+    animation: ghost-dance 900ms ease-in-out infinite;
+  }
+}
+.ghost-stage:has([data-slot="button"]:focus-visible) .ghost {
+  animation: ghost-dance 900ms ease-in-out infinite;
+}
+@keyframes ghost-blink {
+  50% { transform: scaleY(0.1); }
+}
+@keyframes ghost-blink-twice {
+  22%, 78% { transform: scaleY(0.1); }
+  50% { transform: scaleY(1); }
+}
+@keyframes ghost-dance {
+  20% { transform: translate(-14px, -12px) rotate(-12deg); }
+  40%, 80% { transform: scale(1.06, 0.94); }
+  60% { transform: translate(14px, -12px) rotate(12deg); }
+}
+
+/* QR scan effect */
+.qr-print {
+  position: relative;
+  animation: qr-print 380ms cubic-bezier(0.5, 0, 0.2, 1) 120ms both;
+}
+.qr-print::after {
+  content: "";
+  position: absolute;
+  inset-inline: -6px;
+  top: 0;
+  height: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent);
+  animation: qr-scan 380ms cubic-bezier(0.5, 0, 0.2, 1) 120ms both;
+}
+@keyframes qr-print {
+  from { clip-path: inset(0 0 100% 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+@keyframes qr-scan {
+  from { top: 0; opacity: 1; }
+  90% { opacity: 1; }
+  to { top: 100%; opacity: 0; }
+}
+
+/* Reveal animation */
+.reveal > * {
+  animation: rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.reveal > *:nth-child(2) { animation-delay: 0.06s; }
+.reveal > *:nth-child(3) { animation-delay: 0.12s; }
+.reveal > *:nth-child(4) { animation-delay: 0.18s; }
+.reveal > *:nth-child(5) { animation-delay: 0.24s; }
+.reveal > *:nth-child(6) { animation-delay: 0.30s; }
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(12px); }
+}
+
+/* Share actions */
+.share-actions {
+  animation: actions-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) 360ms both;
+}
+@keyframes actions-in {
+  from { opacity: 0; transform: translateY(6px); }
+}
+
+/* Viewfinder for QR scanner */
+.viewfinder {
+  --corner: linear-gradient(white, white);
+  background:
+    var(--corner) top left / 14% 2px,
+    var(--corner) top left / 2px 14%,
+    var(--corner) top right / 14% 2px,
+    var(--corner) top right / 2px 14%,
+    var(--corner) bottom left / 14% 2px,
+    var(--corner) bottom left / 2px 14%,
+    var(--corner) bottom right / 14% 2px,
+    var(--corner) bottom right / 2px 14%;
+  background-repeat: no-repeat;
+  opacity: 0.8;
+}
+.scan-line {
+  top: 20%;
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent);
+  animation: scan 2.4s ease-in-out 0.5s infinite alternate both;
+}
+@keyframes scan {
+  from { top: 20%; }
+  to { top: 80%; }
+}
+
+/* Focus ring */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .qr-print,
+  .qr-print::after,
+  .share-actions,
+  .reveal > * {
+    animation: none;
+  }
+  .ghost,
+  .ghost-eye {
+    animation: none !important;
+  }
+  .scan-line {
+    animation: none;
+    top: 50%;
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+
+/* Input number — hide arrows */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] { -moz-appearance: textfield; }

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "bun run build",
+  "outputDirectory": "dist",
+  "installCommand": "bun install",
+  "rewrites": [
+    {
+      "source": "/relay/:path*",
+      "destination": "https://knowless-relay.em-eieiron.workers.dev/relay/:path*"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/relay/:path*",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store" }
+      ]
+    }
+  ]
+}

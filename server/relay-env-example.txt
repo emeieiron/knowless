@@ -1,0 +1,21 @@
+# Spookly relay server configuration
+# Copy to .env.relay (never commit secrets)
+# Source with: export $(cat .env.relay | grep -v '^#' | xargs)
+# Or use your hosting provider's secret/environment manager.
+
+# REQUIRED — Arc Testnet wallet private key for the relay signer.
+# This wallet pays gas on each executePayment and earns the per-payment fee back.
+# Fund via Arc Studio sidebar "Get test USDC".
+# NEVER expose to browser. NEVER commit.
+RELAY_PRIVATE_KEY=0x<64-hex-char-private-key>
+
+# Optional overrides (defaults in parentheses):
+RELAY_PORT=4001
+RELAY_CHAIN_ID=5042002
+RELAY_MAX_FEE_USDC=200000     # max fee accepted per payment, 6-dec USDC (0.20)
+RELAY_FEE_MARGIN_USDC=50000   # added overhead above gas estimate, 6-dec USDC (0.05)
+
+# RPC proxy (optional — uses public Arc Testnet RPC if absent):
+# RPC_PROXY_BASE_URL=...
+# RPC_PROXY_TOKEN=...
+# RPC_PROXY_CHAINS=Arc_Testnet

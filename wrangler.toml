@@ -1,0 +1,42 @@
+# wrangler.toml — knowless relay Worker + Durable Object
+# Deploy: bunx wrangler deploy (after `bunx wrangler login`)
+# Secrets: bunx wrangler secret put RELAY_PRIVATE_KEY
+
+name = "knowless-relay"
+main = "worker/relay-worker.ts"
+compatibility_date = "2026-08-04"
+compatibility_flags = ["nodejs_compat"]
+
+# ── Durable Objects ────────────────────────────────────────────────────────────
+[[durable_objects.bindings]]
+name = "RELAY_DO"
+class_name = "RelayDO"
+
+# SQLite-backed DO (recommended for new namespaces)
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RelayDO"]
+
+# ── Environment variables (non-secret) ────────────────────────────────────────
+# Secrets (RELAY_PRIVATE_KEY, RELAY_HMAC_SECRET) must be set with:
+#   bunx wrangler secret put RELAY_PRIVATE_KEY
+#   bunx wrangler secret put RELAY_HMAC_SECRET   (optional — derived from key if absent)
+#
+# NEVER put the private key here or in source control.
+
+[vars]
+RELAY_CHAIN_ID = "5042002"
+RELAY_CONTRACT_ADDRESS = "0xbe223821c0925e87cde1ca397fdce253a8ce7b22"
+RELAY_MAX_FEE_USDC = "200000"
+RELAY_FEE_MARGIN_USDC = "50000"
+RELAY_QUOTE_TTL_S = "300"
+# Set ALLOWED_ORIGIN to your Vercel deployment URL, e.g.:
+# ALLOWED_ORIGIN = "https://knowless.vercel.app"
+# For local dev with wrangler dev:
+# ALLOWED_ORIGIN = "http://localhost:5173"
+ALLOWED_ORIGIN = "https://knowless.vercel.app"
+
+# ── Local dev overrides ────────────────────────────────────────────────────────
+[env.dev]
+[env.dev.vars]
+ALLOWED_ORIGIN = "http://localhost:5173"
