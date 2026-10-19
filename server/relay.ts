@@ -30,6 +30,12 @@
  *   RELAY_QUOTE_TTL_S=300                — quote token lifetime in seconds
  */
 
+// Cutover guard — must be first executable code, before any config/key loading.
+if (process.env.RELAY_DISABLED_AFTER_CUTOVER === '1') {
+  console.log('[relay] Disabled after Cloudflare cutover. Exiting.')
+  process.exit(0)
+}
+
 import {
   createPublicClient, createWalletClient, http,
   type Hex, type Address,
