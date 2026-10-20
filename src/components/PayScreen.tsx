@@ -28,7 +28,7 @@
  *   It is never stored in sessionStorage, sent to the server, or logged.
  */
 
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useReadContract } from 'wagmi'
 import type { Address, Hex } from 'viem'
 import { SPOOKLY_ABI, ARC_TESTNET_CHAIN_ID } from '../lib/contract'
@@ -39,6 +39,7 @@ import {
   generateNonce,
   isValidAddress,
 } from '../lib/crypto'
+import { formatUnits } from 'viem'
 import {
   parseUsdcInput,
   formatUsdcFixed,
@@ -46,8 +47,11 @@ import {
   truncateAddress,
 } from '../lib/format'
 import { useRelayQuote } from '../hooks/useRelayQuote'
-
 import { usePendingIntent } from '../hooks/usePendingIntent'
+import { QrScanner } from './QrScanner'
+import { parsePaymentRequest } from '../lib/parsePaymentRequest'
+
+type PayScreenMode = 'scan' | 'review'
 
 const ARC_EXPLORER = 'https://explorer.testnet.arc.io' // arc-studio-allow-onchain-literal
 function buildTxExplorerUrl(_chainId: number, txHash: string): string {
@@ -95,6 +99,10 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
   )
   const privateKey = decoded.ok ? decoded.privateKey : null
   const signerAddress: Address | null = decoded.ok ? decoded.signerAddress : null
+
+  // Scanner / form mode — 'scan' by default; switches to 'review' on accepted scan or manual entry
+  const [mode, setMode] = useState<PayScreenMode>('scan')
+  const [scanQrError, setScanQrError] = useState('')
 
   // Form state
   const [recipient, setRecipient] = useState('')
@@ -288,6 +296,39 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
     }
   }, [intent, submitting, updateTxHash])
 
+  // ── Scanner callbacks ──────────────────────────────────────────────────
+  // Called by QrScanner with decoded QR text. Returns true = accepted (camera stops), false = keep scanning.
+  const handleQrScan = useCallback((text: string): boolean => {
+    const result = parsePaymentRequest(text)
+    if (!result.ok) {
+      setScanQrError(result.error)
+      return false   // keep scanning
+    }
+    setScanQrError('')
+    setRecipient(result.recipient)
+    // Use formatUnits for exact 6-decimal precision — never truncate base units via formatUsdcFixed
+    setAmountStr(result.amountUsdc !== undefined ? formatUnits(result.amountUsdc, 6) : '')
+    setRecipientError('')
+    setAmountError('')
+    setMode('review')
+    return true      // accepted — QrScanner will stop the camera
+  }, [setScanQrError])
+
+  const handleManualEntry = useCallback(() => {
+    setMode('review')
+    setScanQrError('')
+  }, [])
+
+  const handleBackToScan = useCallback(() => {
+    setRecipient('')
+    setAmountStr('')
+    setRecipientError('')
+    setAmountError('')
+    setSubmitError('')
+    setScanQrError('')
+    setMode('scan')
+  }, [])
+
   // ── Render ─────────────────────────────────────────────────────────────
 
   if (isLinkInvalid) {
@@ -354,7 +395,7 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
         <div className="w-16 h-16 rounded-full flex items-center justify-center text-2xl"
           style={{ background: 'rgba(26,128,71,0.1)' }} aria-hidden>✓</div>
         <p className="text-3xl font-bold tabular-nums display" style={{ color: 'var(--ink)' }}>
-          Paid {intent?.amount !== undefined ? formatUsdcFixed(intent.amount) : ''} USDC
+          Paid {intent?.amount !== undefined ? formatUnits(intent.amount, 6) : ''} USDC
         </p>
         <p className="text-sm" style={{ color: 'var(--muted)' }}>
           Sent to {intent?.recipient ? truncateAddress(intent.recipient) : ''}
@@ -433,7 +474,7 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
         <header className="px-4 py-4 flex items-center gap-2"
           style={{ borderBottom: '1px solid var(--border)' }}>
           <span className="text-lg" aria-hidden>👻</span>
-          <span className="font-semibold display" style={{ color: 'var(--ink)' }}>Spookly</span>
+          <span className="font-semibold display" style={{ color: 'var(--ink)' }}>knowless</span>
         </header>
         <main className="flex-1 px-4 py-8 max-w-md mx-auto w-full space-y-5 reveal">
           <div className="rounded-2xl px-5 py-5"
@@ -472,14 +513,14 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
         <header className="px-4 py-4 flex items-center gap-2"
           style={{ borderBottom: '1px solid var(--border)' }}>
           <span className="text-lg" aria-hidden>👻</span>
-          <span className="font-semibold display" style={{ color: 'var(--ink)' }}>Spookly</span>
+          <span className="font-semibold display" style={{ color: 'var(--ink)' }}>knowless</span>
         </header>
         <main className="flex-1 px-4 py-6 max-w-md mx-auto w-full space-y-5 reveal">
           <div className="rounded-xl px-4 py-4"
             style={{ background: 'rgba(18,45,69,0.06)', border: '1px solid var(--border)' }}>
             <p className="font-semibold text-sm mb-1" style={{ color: 'var(--ink)' }}>Payment signed — waiting for relay</p>
             <p className="text-xs mb-3" style={{ color: 'var(--muted)' }}>
-              Sending {formatUsdcFixed(intent.amount)} USDC to {truncateAddress(intent.recipient)}.
+              Sending {formatUnits(intent.amount, 6)} USDC to {truncateAddress(intent.recipient)}.
               The relay will submit this transaction — no new signature needed.
             </p>
             {submitError && (
@@ -500,7 +541,44 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
     )
   }
 
-  // ── Normal payment form ──
+  // ── Scanner view (default when link is ready and no intent yet) ──
+  if (isLinkReady && mode === 'scan' && !intent && !submitting) {
+    return (
+      <div className="min-h-dvh flex flex-col">
+        <header className="px-4 py-4 flex items-center gap-2"
+          style={{ borderBottom: '1px solid var(--border)' }}>
+          <span className="text-lg" aria-hidden role="img" aria-label="knowless">◈</span>
+          <span className="font-semibold display" style={{ color: 'var(--ink)' }}>knowless</span>
+        </header>
+        <main className="flex-1 px-4 py-6 max-w-md mx-auto w-full flex flex-col gap-5 reveal">
+          {/* Balance card */}
+          <div className="rounded-2xl px-5 py-4 text-center"
+            style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+            <p className="text-xs uppercase tracking-wider mb-1"
+              style={{ color: 'var(--subtle)', letterSpacing: '0.08em' }}>Available</p>
+            <p className="text-3xl font-bold tabular-nums display" style={{ color: 'var(--ink)' }}>
+              {formatUsdcFixed(balance)}
+            </p>
+            <p className="text-xs mt-1" style={{ color: 'var(--muted)' }}>USDC · {formatExpiry(expiryTs)}</p>
+          </div>
+          {/* Scanner */}
+          <QrScanner
+            onScan={handleQrScan}
+            onManualEntry={handleManualEntry}
+          />
+          {/* Scan error display (bad QR content — injected by handleQrScan) */}
+          {scanQrError && (
+            <p role="alert" aria-live="polite" className="text-xs text-center max-w-xs mx-auto"
+              style={{ color: 'var(--danger)' }}>
+              {scanQrError}
+            </p>
+          )}
+        </main>
+      </div>
+    )
+  }
+
+  // ── Normal payment form (review mode: after scan accepted or manual entry) ──
   const isLoadingQuote = isQuoteLoading && !feeQuote
   const isSubmitting = submitting
 
@@ -508,11 +586,25 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
     <div className="min-h-dvh flex flex-col">
       <header className="px-4 py-4 flex items-center gap-2"
         style={{ borderBottom: '1px solid var(--border)' }}>
-        <span className="text-lg" aria-hidden>👻</span>
-        <span className="font-semibold display" style={{ color: 'var(--ink)' }}>Spookly</span>
+        <span className="text-lg" aria-hidden role="img" aria-label="knowless">◈</span>
+        <span className="font-semibold display" style={{ color: 'var(--ink)' }}>knowless</span>
       </header>
 
       <main className="flex-1 px-4 py-6 max-w-md mx-auto w-full space-y-5 reveal">
+        {/* Back to scan — only when no pending intent and not submitting */}
+        {!intent && (
+          <button type="button" onClick={handleBackToScan}
+            disabled={isSubmitting}
+            className="flex items-center gap-1.5 text-sm font-medium disabled:opacity-40"
+            style={{ color: 'var(--accent)', minHeight: '44px' }}
+            aria-label="Back to QR scanner">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <polyline points="15 18 9 12 15 6"/>
+            </svg>
+            Scan again
+          </button>
+        )}
         {/* Balance card */}
         {isLinkReady && (
           <div className="rounded-2xl px-5 py-5 text-center"
@@ -641,7 +733,7 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
           aria-busy={isSubmitting}>
           {isSubmitting ? 'Sending…'
             : isLoadingQuote ? 'Loading…'
-              : parsedAmount !== null ? `Pay ${formatUsdcFixed(parsedAmount)} USDC`
+              : parsedAmount !== null ? `Pay ${formatUnits(parsedAmount, 6)} USDC`
                 : 'Pay'}
         </button>
 
