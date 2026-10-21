@@ -87,7 +87,7 @@ function revertName(err: unknown): string | null {
   return null
 }
 
-export function classifyWriteError(err: unknown): ClassifiedError {
+export function classifyWriteError(err: unknown, networkName = 'Arc Testnet'): ClassifiedError {
   if (!err) return { category: 'generic', message: 'Unknown error.' }
 
   const chain = causes(err)
@@ -114,15 +114,23 @@ export function classifyWriteError(err: unknown): ClassifiedError {
     if (n === 'ConnectorChainMismatchError' || n === 'ChainMismatchError') {
       return {
         category: 'chain_mismatch',
-        message: 'Wallet is on the wrong network. Switch to Arc Testnet and try again.',
+        message: `Wallet is on the wrong network. Switch to ${networkName} and try again.`,
       }
     }
 
-    // Chain not found
+    // Chain not found / switch rejected by wallet
     if (n === 'ChainNotFoundError') {
       return {
         category: 'chain_not_found',
-        message: 'Arc Testnet is not configured in your wallet. Add it and try again.',
+        message: `${networkName} is not configured in your wallet. Add it manually and try again.`,
+      }
+    }
+
+    // SwitchChainError — user rejected or wallet does not support switching
+    if (n === 'SwitchChainError') {
+      return {
+        category: 'chain_mismatch',
+        message: `Could not switch to ${networkName}. Please switch manually in your wallet and try again.`,
       }
     }
 
@@ -153,6 +161,18 @@ export function classifyWriteError(err: unknown): ClassifiedError {
       return {
         category: 'resource_unavailable',
         message: 'Your wallet has a pending request. Check the wallet for an existing approval popup, then try again.',
+      }
+    }
+  }
+
+  // Insufficient funds (native gas) — walk cause chain for message patterns
+  for (const e of chain) {
+    const m2 = msg(e).toLowerCase()
+    if (m2.includes('insufficient funds') || m2.includes('insufficient native') ||
+        m2.includes('exceeds balance') || m2.includes('gas required exceeds allowance')) {
+      return {
+        category: 'generic',
+        message: `Insufficient ${networkName} gas (ETH/native) for this transaction. Add gas funds and try again.`,
       }
     }
   }
