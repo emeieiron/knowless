@@ -40,9 +40,13 @@ export interface Env {
   RELAY_FEE_MARGIN_USDC?: string
   RELAY_QUOTE_TTL_S?: string
   RELAY_RPC_URL?: string
+  RELAY_CCTP_ROUTER_ADDRESS?: string
 }
 
-const RELAY_PATHS = new Set(['/relay', '/relay/health', '/relay/quote'])
+const RELAY_PATHS = new Set([
+  '/relay', '/relay/health', '/relay/quote',
+  '/relay/cctp/quote', '/relay/cctp/submit', '/relay/cctp/status',
+])
 
 function isRelayPath(pathname: string): boolean {
   return RELAY_PATHS.has(pathname) || pathname.startsWith('/relay/')

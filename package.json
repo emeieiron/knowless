@@ -18,7 +18,8 @@
     "contracts:build": "forge build",
     "contracts:test": "forge test",
     "test:relay": "bun test server/test/relay-idempotency.test.ts --timeout 30000",
-    "smoke:worker": "bunx wrangler deploy --dry-run --config wrangler.toml --env='' --outdir /tmp/knowless-bundle && cp /tmp/knowless-bundle/relay-worker.js ./_smoke-bundle.js && node --experimental-vm-modules worker/test/health-smoke.mjs; CODE=$?; rm -f ./_smoke-bundle.js; exit $CODE"
+    "smoke:worker": "bunx wrangler deploy --dry-run --config wrangler.toml --env='' --outdir /tmp/knowless-bundle && cp /tmp/knowless-bundle/relay-worker.js ./_smoke-bundle.js && node --experimental-vm-modules worker/test/health-smoke.mjs; CODE=$?; rm -f ./_smoke-bundle.js; exit $CODE",
+    "smoke:cctp": "bunx wrangler deploy --dry-run --config wrangler.toml --env='' --outdir /tmp/knowless-bundle && cp /tmp/knowless-bundle/relay-worker.js ./_smoke-bundle.js && node --experimental-vm-modules worker/test/cctp-smoke.mjs; CODE=$?; rm -f ./_smoke-bundle.js; exit $CODE"
   },
   "dependencies": {
     "@circle-fin/adapter-viem-v2": "^1.18.0",

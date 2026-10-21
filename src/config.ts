@@ -9,7 +9,7 @@
  */
 
 import { http, createConfig } from 'wagmi'
-import { mainnet } from 'wagmi/chains'
+import { mainnet, sepolia, baseSepolia } from 'wagmi/chains'
 import { arcTestnet } from 'viem/chains'
 
 // Pre-register chain RPC URLs for Arc Studio tracing (dev-only)
@@ -19,11 +19,17 @@ if (import.meta.env.DEV) {
   })
 }
 
+// Source chains supported for CCTP inbound funding (Ethereum Sepolia, Base Sepolia).
+// Arc Testnet and mainnet are always included.
+// Arc-only contract reads (escrow getLinkInfo, domainSeparator, etc.) must always
+// specify chainId: arcTestnet.id explicitly so a source-chain switch does not redirect them.
 export const config = createConfig({
-  chains: [arcTestnet, mainnet], // mainnet needed for ENS resolution
+  chains: [arcTestnet, sepolia, baseSepolia, mainnet],
   multiInjectedProviderDiscovery: true, // stable per-wallet connector via EIP-6963
   transports: {
     [arcTestnet.id]: http(),
-    [mainnet.id]: http(), // ENS resolution uses mainnet
+    [sepolia.id]:    http(),
+    [baseSepolia.id]:http(),
+    [mainnet.id]:    http(), // ENS resolution uses mainnet
   },
 })

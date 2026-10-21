@@ -83,6 +83,22 @@ import {
   checkPaymentExecutedLog, validateEntryDeep,
   type QuotePayload,
 } from '../server/relay-codec.js'
+import {
+  type CctpJournalEntry, type CctpJournalStatus,
+  makeCctpIntentKey, encodeCctpRoutePayment,
+  signCctpQuote, verifyCctpQuote,
+  type CctpQuotePayload,
+  CCTP_SCHEMA_SQL, CCTP_QUOTE_GAS_CEILING, ARC_USDC_SCALE as CCTP_USDC_SCALE,
+  ARC_GAS_FLOOR as CCTP_GAS_FLOOR,
+  SUPPORTED_CCTP_DEST_DOMAINS,
+  checkCctpPaymentRoutedLog,
+  fetchIrisFee, pollCctpMessage,
+  validateRouterImmutables,
+  CCTP_FEE_BUFFER_MIN,
+  verifyDestinationReceipt,
+  ARC_TOKEN_MESSENGER_V2,
+  DEST_CHAIN_CONFIGS,
+} from './cctp-relay-do.js'
 
 // ── Env bindings ──────────────────────────────────────────────────────────
 
@@ -96,6 +112,13 @@ export interface RelayDOEnv {
   RELAY_QUOTE_TTL_S?: string     // default '300'
   /** Optional RPC URL override — used in tests to inject a mock server. */
   RELAY_RPC_URL?: string
+  /** Optional Iris API base URL override — used in tests to inject a mock Iris server. */
+  RELAY_IRIS_BASE_URL?: string
+  /**
+   * KnowlessCctpRouter deployed address on Arc Testnet.
+   * CCTP endpoints fail closed (503) when absent or invalid.
+   */
+  RELAY_CCTP_ROUTER_ADDRESS?: string
 }
 
 // ── Minimal RPC call ───────────────────────────────────────────────────────
@@ -184,6 +207,7 @@ export class RelayDO {
   #quoteTtlS       = 300
   #hmacSecret      = ''
   #privateKey      = '' as Hex
+  #irisBaseUrl     = ''  // optional test override for Iris API base URL
 
   // Single promise queue — serializes signing across all concurrent requests
   #queue: Promise<unknown> = Promise.resolve()
@@ -191,12 +215,21 @@ export class RelayDO {
 
   // Reserved relay nonces (populated from DB on init; live in memory).
   // Key: relay wallet nonce. Value: relayKey holding the reservation.
+  // SHARED across legacy (relay_journal) and CCTP (cctp_journal) — one EOA nonce pool.
   #reservedNonces = new Map<number, string>()
 
   // Stable DO identity key: keccak256(chainId:contractAddress:relayAddress).
   // Exposed so relay-worker.ts can derive the same key from env vars without
   // needing an account object (avoids importing private key in the worker router).
   #doIdentityKey = ''
+
+  // ── CCTP fields ────────────────────────────────────────────────────────────
+  /** KnowlessCctpRouter address. Empty string = CCTP disabled (fail-closed). */
+  #cctpRouterAddress = '' as Address | ''
+  /** Readiness check result: null = not yet checked, string = error, true = ok */
+  #cctpReadinessResult: null | true | string = null
+  /** USDC address on Arc (read from relay contract during init for CCTP verification). */
+  #usdcAddress = '' as Address | ''
 
   /**
    * Stable DO key: chain + relay ACCOUNT ADDRESS only.
@@ -237,9 +270,10 @@ export class RelayDO {
       this.#quoteTtlS = parseInt(this.env.RELAY_QUOTE_TTL_S ?? '300', 10)
       this.#hmacSecret = this.env.RELAY_HMAC_SECRET ?? deriveHmacSecret(pk)
       this.#rpcUrl = this.env.RELAY_RPC_URL ?? 'https://rpc.testnet.arc.io' // arc-studio-allow-onchain-literal
+      this.#irisBaseUrl = this.env.RELAY_IRIS_BASE_URL ?? ''
       this.#doIdentityKey = RelayDO.deriveDoKey(this.#chainId, this.#relayAddress)
 
-      // Create schema
+      // Create schema — legacy tables + CCTP extension
       this.state.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS relay_journal (
           intentKey       TEXT PRIMARY KEY,
@@ -269,6 +303,7 @@ export class RelayDO {
           key   TEXT PRIMARY KEY,
           value TEXT NOT NULL
         );
+        ${CCTP_SCHEMA_SQL}
       `)
 
       // Config fingerprint: chain + contract + relayAddress.
@@ -393,12 +428,103 @@ export class RelayDO {
         )
       }
 
+      // CCTP router address — optional; CCTP endpoints fail closed if absent
+      const cctpRouterRaw = this.env.RELAY_CCTP_ROUTER_ADDRESS ?? ''
+      if (cctpRouterRaw && /^0x[0-9a-fA-F]{40}$/.test(cctpRouterRaw)) {
+        this.#cctpRouterAddress = cctpRouterRaw as Address
+      }
+      // USDC address — derived from RELAY_CONTRACT_ADDRESS (we know Arc USDC from chain)
+      // Hard-coded Arc Testnet USDC; validated during CCTP readiness check
+      this.#usdcAddress = '0x3600000000000000000000000000000000000000' as Address
+
+      // Hydrate CCTP rows — full deep validation, shares #reservedNonces with legacy rows.
+      const cctpNonTerminalStatuses = `('pending','broadcast','cctp_source_confirmed','cctp_mint_pending')`
+
+      const knownCctpStatuses = new Set([
+        'pending','broadcast','cctp_source_confirmed','cctp_mint_pending',
+        'cctp_mint_confirmed','cctp_mint_failed','failed',
+      ])
+
+      // Full hydration query — all columns needed for deep validation
+      const allCctpRows = [...this.state.storage.sql.exec<CctpJournalEntry>(
+        `SELECT * FROM cctp_journal ORDER BY createdAt ASC`
+      )]
+
+      for (const row of allCctpRows) {
+        if (!knownCctpStatuses.has(row.status)) {
+          throw new Error(
+            `cctp_journal row has unknown status '${row.status}' (key: ${row.cctpIntentKey})`
+          )
+        }
+        if (row.chainId !== this.#chainId) {
+          throw new Error(
+            `cctp_journal row chainId ${row.chainId} !== config ${this.#chainId} (key: ${row.cctpIntentKey})`
+          )
+        }
+        // routerAddress must match configured CCTP router (not self-validated from DB)
+        if (this.#cctpRouterAddress && row.routerAddress.toLowerCase() !== (this.#cctpRouterAddress as string).toLowerCase()) {
+          throw new Error(
+            `cctp_journal row routerAddress ${row.routerAddress} !== configured router ${this.#cctpRouterAddress} (key: ${row.cctpIntentKey})`
+          )
+        }
+        // Non-terminal cctp rows with rawTx=null are indeterminate
+        const cctpTerminal = row.status === 'cctp_mint_confirmed' ||
+                             row.status === 'cctp_mint_failed' ||
+                             row.status === 'failed'
+        if (!cctpTerminal && (!row.rawTx || !row.txHash)) {
+          throw new Error(
+            `cctp_journal non-terminal row missing rawTx/txHash (key: ${row.cctpIntentKey}).`
+          )
+        }
+        // Deep identity: recompute cctpIntentKey from stored fields
+        const recomputed = makeCctpIntentKey(
+          row.signerAddress, row.escrowNonce, row.destinationDomain,
+          row.mintRecipient, row.grossAmount, row.maxCctpFee,
+          row.relayFee, row.quoteExpiry,
+          row.paymentSig, row.cctpSig,
+        )
+        if (recomputed !== row.cctpIntentKey) {
+          throw new Error(
+            `cctp_journal row cctpIntentKey mismatch: stored ${row.cctpIntentKey} != computed ${recomputed}`
+          )
+        }
+        // Verify legacyRelayKey matches signerAddress:escrowNonce
+        const expectedLegacyKey = makeRelayKey(row.signerAddress, row.escrowNonce)
+        if (expectedLegacyKey !== row.legacyRelayKey) {
+          throw new Error(
+            `cctp_journal row legacyRelayKey mismatch: stored ${row.legacyRelayKey} != computed ${expectedLegacyKey}`
+          )
+        }
+        // txHash must equal keccak256(rawTx) for rows with rawTx
+        if (row.rawTx && row.txHash) {
+          const computedHash = keccak256(row.rawTx as Hex)
+          if (computedHash.toLowerCase() !== row.txHash.toLowerCase()) {
+            throw new Error(
+              `cctp_journal row txHash mismatch: stored ${row.txHash} != keccak256(rawTx) ${computedHash}`
+            )
+          }
+        }
+        // Check for nonce conflict with legacy journal (should not occur in practice)
+        if (!cctpTerminal && row.relayNonce !== null) {
+          const existing = this.#reservedNonces.get(row.relayNonce)
+          if (existing && existing !== row.legacyRelayKey) {
+            throw new Error(
+              `cctp_journal relay nonce ${row.relayNonce} conflicts with ${existing} in relay_journal`
+            )
+          }
+          this.#reservedNonces.set(row.relayNonce, row.legacyRelayKey)
+        }
+      }
+
       // Re-arm the alarm on cold start if there are any unresolved rows.
       // This ensures alarm-driven receipt reconciliation resumes after eviction/restart.
-      const unresolvedRows = [...this.state.storage.sql.exec<{ cnt: number }>(
+      const unresolvedLegacy = [...this.state.storage.sql.exec<{ cnt: number }>(
         `SELECT COUNT(*) as cnt FROM relay_journal WHERE status IN ('pending','broadcast') AND rawTx IS NOT NULL`
       )]
-      const unresolvedCount = unresolvedRows[0]?.cnt ?? 0
+      const unresolvedCctp = [...this.state.storage.sql.exec<{ cnt: number }>(
+        `SELECT COUNT(*) as cnt FROM cctp_journal WHERE status IN ${cctpNonTerminalStatuses} AND rawTx IS NOT NULL`
+      )]
+      const unresolvedCount = (unresolvedLegacy[0]?.cnt ?? 0) + (unresolvedCctp[0]?.cnt ?? 0)
       if (unresolvedCount > 0) {
         const existingAlarm = await this.state.storage.getAlarm()
         if (!existingAlarm) {
@@ -439,6 +565,14 @@ export class RelayDO {
     if (path === '/relay' && request.method === 'POST')
       return this.#enqueueRelay(request)
 
+    // ── CCTP endpoints ────────────────────────────────────────────────────
+    if (path === '/relay/cctp/quote' && request.method === 'GET')
+      return this.#handleCctpQuote(url)
+    if (path === '/relay/cctp/submit' && request.method === 'POST')
+      return this.#enqueueCctpSubmit(request)
+    if (path === '/relay/cctp/status' && request.method === 'GET')
+      return this.#handleCctpStatus(url)
+
     return Response.json({ error: 'Not found.' }, { status: 404 })
   }
 
@@ -457,14 +591,26 @@ export class RelayDO {
     )]
     const staleCount = stale[0]?.cnt ?? 0
 
+    const cctpRows = [...this.state.storage.sql.exec<{ cnt: number }>(
+      `SELECT COUNT(*) as cnt FROM cctp_journal WHERE status IN ('pending','broadcast','cctp_source_confirmed','cctp_mint_pending')`
+    )]
+    const cctpQueueDepth = cctpRows[0]?.cnt ?? 0
+
+    // cctpEnabled: true only when router is configured AND readiness has been
+    // verified (i.e. immutables confirmed on-chain). Mere address presence is not enough.
+    const cctpEnabled = !!this.#cctpRouterAddress && this.#cctpReadinessResult === true
+
     return Response.json({
       ok: true,
       available: this.#schemaReady && !this.#initError,
       queueDepth,
+      cctpQueueDepth,
       staleEntries: staleCount,
       inFlightQueue: this.#queueDepth,
       chainId: this.#chainId,
       relayWallet: this.#relayAddress,
+      cctpEnabled,
+      cctpRouterConfigured: !!this.#cctpRouterAddress,
       ...(this.#initError ? { error: this.#initError } : {}),
     })
   }
@@ -675,6 +821,20 @@ export class RelayDO {
         error: 'Conflicting intent: a different payment is already recorded for this signer+nonce.',
         existingTxHash: existingByRelayKey.txHash,
       }, { status: 409 })
+    }
+
+    // Cross-table conflict: same signer+nonce in cctp_journal (non-terminal)
+    const cctpConflict = this.#getCctpRowByLegacyKey(relayKey)
+    if (cctpConflict) {
+      const cctpTerminal = cctpConflict.status === 'cctp_mint_confirmed' ||
+                           cctpConflict.status === 'cctp_mint_failed' ||
+                           cctpConflict.status === 'failed'
+      if (!cctpTerminal) {
+        return Response.json({
+          error: 'Conflicting CCTP intent: this signer+nonce is already used by a CCTP route.',
+          existingTxHash: cctpConflict.txHash,
+        }, { status: 409 })
+      }
     }
 
     // ── On-chain reads (fail-closed) ───────────────────────────────────
@@ -967,10 +1127,188 @@ export class RelayDO {
       } catch { anyUnresolved = true }
     }
 
-    // Re-schedule if still unresolved entries remain
-    if (anyUnresolved || rows.length > 0) {
+    // ── CCTP alarm: source confirmation + mint monitoring ─────────────
+    const cctpUnresolved = await this.#runCctpAlarm()
+
+    // Re-schedule if still unresolved entries remain (legacy or CCTP)
+    if (anyUnresolved || rows.length > 0 || cctpUnresolved) {
       await this.state.storage.setAlarm(Date.now() + 15_000)
     }
+  }
+
+  async #runCctpAlarm(): Promise<boolean> {
+    let anyUnresolved = false
+
+    // Source broadcast rows: check receipt
+    const sourcePending = [...this.state.storage.sql.exec<{
+      cctpIntentKey: string; txHash: string | null; rawTx: string | null
+      legacyRelayKey: string; relayNonce: number
+      signerAddress: string; destinationDomain: number
+      mintRecipient: string; grossAmount: string; escrowNonce: string; status: string
+    }>(
+      `SELECT cctpIntentKey, txHash, rawTx, legacyRelayKey, relayNonce,
+              signerAddress, destinationDomain, mintRecipient, grossAmount, escrowNonce, status
+       FROM cctp_journal WHERE status IN ('pending','broadcast') AND rawTx IS NOT NULL AND txHash IS NOT NULL`
+    )]
+
+    for (const row of sourcePending) {
+      try {
+        const receipt = await rpcCall(
+          this.#rpcUrl, 'eth_getTransactionReceipt', [row.txHash]
+        ) as Record<string, unknown> | null
+
+        if (!receipt) {
+          if (row.rawTx) {
+            try {
+              await rpcCall(this.#rpcUrl, 'eth_sendRawTransaction', [row.rawTx])
+              if (row.status === 'pending') {
+                this.state.storage.sql.exec(
+                  `UPDATE cctp_journal SET status='broadcast', updatedAt=? WHERE cctpIntentKey=?`,
+                  Date.now(), row.cctpIntentKey,
+                )
+              }
+            } catch { /* already known */ }
+          }
+          anyUnresolved = true
+          continue
+        }
+
+        if (receipt.status === '0x0') {
+          this.state.storage.sql.exec(
+            `UPDATE cctp_journal SET status='failed', updatedAt=? WHERE cctpIntentKey=?`,
+            Date.now(), row.cctpIntentKey,
+          )
+          this.#reservedNonces.delete(row.relayNonce)
+          continue
+        }
+
+        if (receipt.status !== '0x1') { anyUnresolved = true; continue }
+
+        // Source confirmed — verify CctpPaymentRouted event
+        const fullEntry = this.#getCctpRow(row.cctpIntentKey)
+        if (!fullEntry) { anyUnresolved = true; continue }
+
+        const routerAddr = fullEntry.routerAddress
+        const receiptForCheck = {
+          status: receipt.status as string,
+          to: receipt.to as string | null,
+          transactionHash: receipt.transactionHash as string,
+          logs: (receipt.logs ?? []) as Array<{ address: string; topics: string[]; data: string }>,
+          blockNumber: receipt.blockNumber as string | undefined,
+        }
+        const sourceCheck = checkCctpPaymentRoutedLog(receiptForCheck, fullEntry, routerAddr, this.#contractAddress)
+        if (!sourceCheck.ok) {
+          anyUnresolved = true; continue
+        }
+
+        // Mark source confirmed; persist source txHash
+        this.state.storage.sql.exec(
+          `UPDATE cctp_journal SET status='cctp_source_confirmed',
+           sourceTxHash=?, receiptBlockNumber=?, updatedAt=?
+           WHERE cctpIntentKey=?`,
+          row.txHash, Number(sourceCheck.blockNumber), Date.now(), row.cctpIntentKey,
+        )
+        this.#reservedNonces.delete(row.relayNonce)
+        anyUnresolved = true  // still need destination
+      } catch { anyUnresolved = true }
+    }
+
+    // Mint monitoring rows: poll Circle Messages API
+    const mintPending = [...this.state.storage.sql.exec<{
+      cctpIntentKey: string; sourceTxHash: string | null
+      destinationDomain: number; mintRecipient: string
+      grossAmount: string; maxCctpFee: string
+    }>(
+      `SELECT cctpIntentKey, sourceTxHash, destinationDomain, mintRecipient, grossAmount, maxCctpFee
+       FROM cctp_journal WHERE status IN ('cctp_source_confirmed','cctp_mint_pending')`
+    )]
+
+    for (const row of mintPending) {
+      if (!row.sourceTxHash) { anyUnresolved = true; continue }
+      try {
+        const msgResult = await pollCctpMessage(
+          row.sourceTxHash, row.destinationDomain, row.mintRecipient,
+          this.#cctpRouterAddress as string,
+          this.#usdcAddress as string,
+        )
+
+        if (!msgResult || (msgResult as { error: string }).error) {
+          anyUnresolved = true
+          // Update to mint_pending if still source_confirmed
+          this.state.storage.sql.exec(
+            `UPDATE cctp_journal SET status='cctp_mint_pending', updatedAt=?
+             WHERE cctpIntentKey=? AND status='cctp_source_confirmed'`,
+            Date.now(), row.cctpIntentKey,
+          )
+          continue
+        }
+
+        const msg = msgResult as CctpMessageStatus
+        if (msg.forwardTxHash) {
+          // Destination forwarding hash available — verify destination receipt.
+          // Trigger from forwardTxHash presence only; do not guess forwardState enum values.
+          const destConfig = DEST_CHAIN_CONFIGS[row.destinationDomain]
+          const fullRow = this.#getCctpRow(row.cctpIntentKey)
+          let destVerified = false
+          let verifiedNet: bigint | null = null
+
+          if (destConfig && fullRow) {
+            try {
+              const destReceipt = await rpcCall(destConfig.rpcUrl, 'eth_getTransactionReceipt', [msg.forwardTxHash]) as Record<string, unknown> | null
+              if (destReceipt) {
+                const receiptForVerify = {
+                  status: destReceipt.status as string,
+                  transactionHash: destReceipt.transactionHash as string,
+                  logs: (destReceipt.logs ?? []) as Array<{ address: string; topics: string[]; data: string }>,
+                }
+                // attestedNonce: bytes32 hex from Circle message (may be '0' pre-attestation)
+                const attestedNonce = msg.attestedNonce.replace(/^0x/, '').padStart(64, '0')
+                const vr = verifyDestinationReceipt(
+                  receiptForVerify, fullRow,
+                  destConfig.transmitterAddr,
+                  destConfig.usdcAddr,
+                  attestedNonce,
+                  ARC_TOKEN_MESSENGER_V2,
+                )
+                if (vr.ok) {
+                  destVerified = true
+                  verifiedNet  = vr.netAmount
+                }
+                // else: receipt fetched but failed verification — keep monitoring
+              }
+              // null receipt: not yet mined on destination — keep monitoring
+            } catch { /* dest RPC unavailable — keep monitoring */ }
+          }
+
+          if (destVerified && verifiedNet !== null) {
+            this.state.storage.sql.exec(
+              `UPDATE cctp_journal SET status='cctp_mint_confirmed',
+               destTxHash=?, netAmountDelivered=?, updatedAt=?
+               WHERE cctpIntentKey=?`,
+              msg.forwardTxHash, verifiedNet.toString(), Date.now(), row.cctpIntentKey,
+            )
+          } else {
+            // Messages API says complete but receipt not yet verifiable — keep monitoring
+            anyUnresolved = true
+            this.state.storage.sql.exec(
+              `UPDATE cctp_journal SET status='cctp_mint_pending', updatedAt=?
+               WHERE cctpIntentKey=? AND status='cctp_source_confirmed'`,
+              Date.now(), row.cctpIntentKey,
+            )
+          }
+        } else {
+          // No forwardTxHash yet — still in progress
+          this.state.storage.sql.exec(
+            `UPDATE cctp_journal SET status='cctp_mint_pending', updatedAt=?
+             WHERE cctpIntentKey=? AND status='cctp_source_confirmed'`,
+            Date.now(), row.cctpIntentKey,
+          )
+          anyUnresolved = true
+        }
+      } catch { anyUnresolved = true }
+    }
+
+    return anyUnresolved
   }
 
   // ── DB helpers ──────────────────────────────────────────────────────────
@@ -1022,5 +1360,583 @@ export class RelayDO {
     const expiry     = BigInt('0x' + (data.slice(192, 256) || '0'))
     const active     = BigInt('0x' + (data.slice(256, 320) || '0')) !== 0n
     return { active, balance, feeBalance, expiry }
+  }
+
+  // ── CCTP DB helpers ─────────────────────────────────────────────────────
+
+  #getCctpRow(cctpIntentKey: string): CctpJournalEntry | null {
+    const rows = [...this.state.storage.sql.exec<Record<string, unknown>>(
+      `SELECT * FROM cctp_journal WHERE cctpIntentKey=?`, cctpIntentKey
+    )]
+    return rows[0] ? (rows[0] as unknown as CctpJournalEntry) : null
+  }
+
+  #getCctpRowByLegacyKey(legacyRelayKey: string): CctpJournalEntry | null {
+    const rows = [...this.state.storage.sql.exec<Record<string, unknown>>(
+      `SELECT * FROM cctp_journal WHERE legacyRelayKey=?`, legacyRelayKey
+    )]
+    return rows[0] ? (rows[0] as unknown as CctpJournalEntry) : null
+  }
+
+  // ── CCTP readiness guard ─────────────────────────────────────────────────
+
+  async #assertCctpReady(): Promise<string | null> {
+    if (!this.#cctpRouterAddress)
+      return 'CCTP relay not configured (RELAY_CCTP_ROUTER_ADDRESS not set).'
+    if (this.#cctpReadinessResult === true) return null
+    if (typeof this.#cctpReadinessResult === 'string') return this.#cctpReadinessResult
+
+    // First check: validate router immutables
+    const err = await validateRouterImmutables(
+      this.#cctpRouterAddress,
+      this.#contractAddress,
+      this.#usdcAddress,
+      this.#rpcUrl,
+    )
+    this.#cctpReadinessResult = err ?? true
+    return err ?? null
+  }
+
+  // ── CCTP Quote ───────────────────────────────────────────────────────────
+
+  async #handleCctpQuote(url: URL): Promise<Response> {
+    try { this.#assertReady() } catch {
+      return Response.json({ error: 'Relay not available.' }, { status: 503 })
+    }
+
+    const readinessErr = await this.#assertCctpReady()
+    if (readinessErr)
+      return Response.json({ error: readinessErr }, { status: 503 })
+
+    // Validate query params
+    const sa   = url.searchParams.get('signerAddress') as Address | null
+    const dest = url.searchParams.get('destinationDomain')
+    const mr   = url.searchParams.get('mintRecipient') as Address | null
+    // Accept desiredNetAmount (UI) or grossAmount (smoke compat)
+    const desiredNetStr = url.searchParams.get('desiredNetAmount')
+    const grossAmtStr   = url.searchParams.get('grossAmount')
+    const amtStr = desiredNetStr ?? grossAmtStr
+
+    if (!sa || !/^0x[0-9a-fA-F]{40}$/.test(sa))
+      return Response.json({ error: 'Invalid signerAddress.' }, { status: 400 })
+    if (dest === null || !SUPPORTED_CCTP_DEST_DOMAINS.includes(Number(dest) as 0 | 6))
+      return Response.json({ error: 'Unsupported destinationDomain (must be 0 or 6).' }, { status: 400 })
+    if (!mr || !/^0x[0-9a-fA-F]{40}$/.test(mr))
+      return Response.json({ error: 'Invalid mintRecipient.' }, { status: 400 })
+    if (!amtStr || !/^\d+$/.test(amtStr))
+      return Response.json({ error: 'Invalid amount (desiredNetAmount or grossAmount required, decimal integer).' }, { status: 400 })
+
+    const destinationDomain = Number(dest) as 0 | 6
+    let inputAmount: bigint
+    try { inputAmount = BigInt(amtStr) } catch {
+      return Response.json({ error: 'Amount must be a decimal integer.' }, { status: 400 })
+    }
+    if (inputAmount <= 0n)
+      return Response.json({ error: 'Amount must be > 0.' }, { status: 400 })
+
+    // Fetch Iris forwarding fees first — need maxCctpFee to compute gross
+    // (both desiredNetAmount and grossAmount paths need fee first)
+    const irisResultPre = await fetchIrisFee(destinationDomain, inputAmount, undefined, this.#irisBaseUrl || undefined)
+    if (!irisResultPre.ok)
+      return Response.json({ error: `CCTP fee unavailable: ${irisResultPre.reason}` }, { status: 503 })
+
+    const { forwardFee: forwardFeePre } = irisResultPre
+    const feeBufferPre = forwardFeePre / 100n
+    const maxCctpFeePre = forwardFeePre + (feeBufferPre > CCTP_FEE_BUFFER_MIN ? feeBufferPre : CCTP_FEE_BUFFER_MIN)
+
+    // If desiredNetAmount: gross = desiredNet + maxCctpFee (fee is NOT deducted from recipient amount)
+    // If grossAmount (smoke compat): gross = as provided, validate > maxCctpFee
+    let grossAmount: bigint
+    if (desiredNetStr) {
+      grossAmount = inputAmount + maxCctpFeePre
+    } else {
+      grossAmount = inputAmount
+      if (grossAmount <= maxCctpFeePre)
+        return Response.json({
+          error: `grossAmount (${grossAmount}) is not greater than maxCctpFee (${maxCctpFeePre}).`,
+        }, { status: 400 })
+    }
+
+    const maxCctpFee = maxCctpFeePre
+    const minDestReceived = grossAmount - maxCctpFee
+
+    // Verify link is active and has sufficient balance + fee budget
+    let linkActive = true
+    let linkBalance = 0n
+    let linkFeeBalance = 0n
+    try {
+      const linkInfoHex = await rpcCall(this.#rpcUrl, 'eth_call', [{
+        to: this.#contractAddress,
+        data: this.#encodeLinkInfoCall(sa),
+      }, 'latest']) as string
+      const info = this.#decodeLinkInfo(linkInfoHex)
+      linkActive     = info.active
+      linkBalance    = info.balance
+      linkFeeBalance = info.feeBalance
+    } catch {
+      return Response.json({ error: 'RPC unavailable. Try again.' }, { status: 503 })
+    }
+
+    if (!linkActive)
+      return Response.json({ error: 'Link is not active.' }, { status: 400 })
+    if (grossAmount > linkBalance)
+      return Response.json({ error: `grossAmount ${grossAmount} exceeds link balance ${linkBalance}.` }, { status: 400 })
+
+    // Relay fee: gas cost + margin (same policy as legacy, but higher gas ceiling)
+    let gasPrice: bigint
+    try {
+      const gp = await rpcCall(this.#rpcUrl, 'eth_gasPrice', []) as string
+      gasPrice = BigInt(gp)
+    } catch { gasPrice = CCTP_GAS_FLOOR }
+    if (gasPrice < CCTP_GAS_FLOOR) gasPrice = CCTP_GAS_FLOOR
+
+    const gasCost18 = CCTP_QUOTE_GAS_CEILING * gasPrice
+    const gasCost6  = (gasCost18 + CCTP_USDC_SCALE - 1n) / CCTP_USDC_SCALE
+    const relayFee  = gasCost6 + this.#feeMarginUsdc
+
+    if (relayFee > this.#maxFeeUsdc) {
+      return Response.json({
+        error: `Gas cost (${relayFee}) exceeds relay max (${this.#maxFeeUsdc}).`,
+        relayFee: relayFee.toString(),
+        maxFee: this.#maxFeeUsdc.toString(),
+      }, { status: 503 })
+    }
+
+    if (relayFee > linkFeeBalance) {
+      return Response.json({
+        error: 'insufficient_fee_budget',
+        relayFee: relayFee.toString(),
+        feeBalance: linkFeeBalance.toString(),
+      }, { status: 400 })
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    const quoteExpiry = now + this.#quoteTtlS
+
+    const payload: CctpQuotePayload = {
+      t:                 'cctp-v1',
+      signerAddress:     sa.toLowerCase(),
+      destinationDomain,
+      mintRecipient:     mr.toLowerCase(),
+      grossAmount:       grossAmount.toString(),
+      maxCctpFee:        maxCctpFee.toString(),
+      relayFee:          relayFee.toString(),
+      relayerAddress:    this.#relayAddress.toLowerCase(),
+      quoteExpiry,
+      issuedAt:          now,
+      sourceChainId:     this.#chainId,
+      escrowAddress:     this.#contractAddress.toLowerCase(),
+      routerAddress:     (this.#cctpRouterAddress as string).toLowerCase(),
+    }
+    const quoteToken = signCctpQuote(payload, this.#hmacSecret)
+
+    return Response.json({
+      signerAddress:    sa,
+      destinationDomain,
+      mintRecipient:    mr,
+      grossAmount:      grossAmount.toString(),
+      maxCctpFee:       maxCctpFee.toString(),
+      relayFee:         relayFee.toString(),
+      minDestReceived:  minDestReceived.toString(),
+      relayerAddress:   this.#relayAddress,
+      quoteExpiry,
+      quoteToken,
+      routerAddress:    this.#cctpRouterAddress,
+      gasEstimate:      CCTP_QUOTE_GAS_CEILING.toString(),
+      gasPrice:         gasPrice.toString(),
+    })
+  }
+
+  // ── CCTP Submit (enqueue) ────────────────────────────────────────────────
+
+  #enqueueCctpSubmit(request: Request): Promise<Response> {
+    if (this.#queueDepth >= MAX_QUEUE_DEPTH) {
+      return Promise.resolve(
+        Response.json({ error: 'Relay queue at capacity — try again later.' }, { status: 503 })
+      )
+    }
+    this.#queueDepth++
+    const task = (): Promise<Response> => {
+      const p = this.#handleCctpSubmit(request)
+      p.then(() => { this.#queueDepth-- }, () => { this.#queueDepth-- })
+      return p
+    }
+    const next = this.#queue.then(task, task) as Promise<Response>
+    this.#queue = next.then(() => undefined, () => undefined)
+    return next
+  }
+
+  async #handleCctpSubmit(request: Request): Promise<Response> {
+    try { this.#assertReady() } catch {
+      return Response.json({ error: 'Relay not available.' }, { status: 503 })
+    }
+    const readinessErr = await this.#assertCctpReady()
+    if (readinessErr)
+      return Response.json({ error: readinessErr }, { status: 503 })
+
+    let body: Record<string, unknown>
+    try {
+      body = await request.json() as Record<string, unknown>
+    } catch {
+      return Response.json({ error: 'Invalid JSON.' }, { status: 400 })
+    }
+
+    const {
+      signerAddress, destinationDomain: destRaw, mintRecipient,
+      grossAmount: grossRaw, maxCctpFee: maxFeeRaw, relayFee: relayFeeRaw,
+      quoteExpiry: qeRaw, escrowNonce: nonceRaw,
+      paymentSig, cctpSig, chainId, quoteToken,
+    } = body
+
+    // Field validation
+    if (typeof signerAddress !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(signerAddress))
+      return Response.json({ error: 'Invalid signerAddress.' }, { status: 400 })
+    if (typeof mintRecipient !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(mintRecipient))
+      return Response.json({ error: 'Invalid mintRecipient.' }, { status: 400 })
+    if (typeof paymentSig !== 'string' || !/^0x[0-9a-fA-F]{128,132}$/.test(paymentSig))
+      return Response.json({ error: 'Invalid paymentSig.' }, { status: 400 })
+    if (typeof cctpSig !== 'string' || !/^0x[0-9a-fA-F]{128,132}$/.test(cctpSig))
+      return Response.json({ error: 'Invalid cctpSig.' }, { status: 400 })
+    if (typeof quoteToken !== 'string' || quoteToken.length < 10)
+      return Response.json({ error: 'Missing quoteToken.' }, { status: 400 })
+    if (chainId !== this.#chainId)
+      return Response.json({ error: `Wrong chain. Expected ${this.#chainId}.` }, { status: 400 })
+
+    let grossAmount: bigint, maxCctpFee: bigint, relayFee: bigint
+    let quoteExpiry: bigint, escrowNonce: bigint
+    let destinationDomain: number
+    try {
+      grossAmount    = BigInt(String(grossRaw))
+      maxCctpFee     = BigInt(String(maxFeeRaw))
+      relayFee       = BigInt(String(relayFeeRaw))
+      quoteExpiry    = BigInt(String(qeRaw))
+      escrowNonce    = BigInt(String(nonceRaw))
+      destinationDomain = Number(destRaw)
+    } catch {
+      return Response.json({ error: 'Numeric fields must be decimal strings.' }, { status: 400 })
+    }
+
+    if (!SUPPORTED_CCTP_DEST_DOMAINS.includes(destinationDomain as 0 | 6))
+      return Response.json({ error: 'Unsupported destinationDomain.' }, { status: 400 })
+    if (grossAmount <= 0n)
+      return Response.json({ error: 'grossAmount must be > 0.' }, { status: 400 })
+    if (relayFee <= 0n)
+      return Response.json({ error: 'relayFee must be > 0.' }, { status: 400 })
+    if (grossAmount <= maxCctpFee)
+      return Response.json({ error: 'grossAmount must be > maxCctpFee.' }, { status: 400 })
+
+    // Cross-table conflict key (same as legacy relayKey for escrow nonce)
+    const legacyRelayKey = makeRelayKey(signerAddress, escrowNonce.toString())
+    const cctpIntentKey  = makeCctpIntentKey(
+      signerAddress, escrowNonce.toString(), destinationDomain,
+      mintRecipient, grossAmount.toString(), maxCctpFee.toString(),
+      relayFee.toString(), quoteExpiry.toString(),
+      paymentSig, cctpSig,
+    )
+
+    // Idempotency: check existing CCTP row (exact same intent)
+    const existingCctp = this.#getCctpRow(cctpIntentKey)
+
+    // Same-table different-intent conflict: same signer+escrowNonce, different signatures/routing
+    const cctpSameNonceConflict = !existingCctp ? this.#getCctpRowByLegacyKey(legacyRelayKey) : null
+
+    // Check legacy cross-table conflict
+    const legacyConflict = !existingCctp ? this.#getRow(legacyRelayKey) : null
+    const legacyConflictByKey = !existingCctp ? this.#getRowByRelayKey(legacyRelayKey) : null
+
+    if (!existingCctp) {
+      // HMAC quote verification
+      const qp = verifyCctpQuote(quoteToken, this.#hmacSecret)
+      if (!qp)
+        return Response.json({ error: 'Invalid or tampered quoteToken.' }, { status: 401 })
+      if (Math.floor(Date.now() / 1000) > qp.quoteExpiry)
+        return Response.json({ error: 'Quote token expired. Fetch a new CCTP quote.' }, { status: 400 })
+      // Verify quote binds ALL routing fields
+      if (qp.signerAddress     !== signerAddress.toLowerCase())
+        return Response.json({ error: 'quoteToken signerAddress mismatch.' }, { status: 400 })
+      if (qp.destinationDomain !== destinationDomain)
+        return Response.json({ error: 'quoteToken destinationDomain mismatch.' }, { status: 400 })
+      if (qp.mintRecipient     !== mintRecipient.toLowerCase())
+        return Response.json({ error: 'quoteToken mintRecipient mismatch.' }, { status: 400 })
+      if (qp.grossAmount       !== grossAmount.toString())
+        return Response.json({ error: 'quoteToken grossAmount mismatch.' }, { status: 400 })
+      if (qp.maxCctpFee        !== maxCctpFee.toString())
+        return Response.json({ error: 'quoteToken maxCctpFee mismatch.' }, { status: 400 })
+      if (qp.quoteExpiry       !== Number(quoteExpiry))
+        return Response.json({ error: 'quoteToken quoteExpiry mismatch.' }, { status: 400 })
+      if (qp.relayerAddress    !== this.#relayAddress.toLowerCase())
+        return Response.json({ error: 'quoteToken relayerAddress mismatch.' }, { status: 400 })
+      // Verify quote was issued for this chain, escrow and router
+      if (qp.sourceChainId !== this.#chainId)
+        return Response.json({ error: 'quoteToken sourceChainId mismatch.' }, { status: 400 })
+      if (qp.escrowAddress !== this.#contractAddress.toLowerCase())
+        return Response.json({ error: 'quoteToken escrowAddress mismatch.' }, { status: 400 })
+      if (qp.routerAddress !== (this.#cctpRouterAddress as string).toLowerCase())
+        return Response.json({ error: 'quoteToken routerAddress mismatch.' }, { status: 400 })
+
+      const quotedRelayFee = BigInt(qp.relayFee)
+      if (relayFee < quotedRelayFee)
+        return Response.json({ error: `relayFee ${relayFee} below quoted ${quotedRelayFee}.` }, { status: 400 })
+      if (relayFee > this.#maxFeeUsdc)
+        return Response.json({ error: `relayFee ${relayFee} exceeds max ${this.#maxFeeUsdc}.` }, { status: 400 })
+    }
+
+    // Idempotency return
+    if (existingCctp) {
+      if (existingCctp.status === 'cctp_mint_confirmed')
+        return Response.json({ txHash: existingCctp.txHash, status: 'cctp_mint_confirmed',
+          destTxHash: existingCctp.destTxHash, netAmountDelivered: existingCctp.netAmountDelivered }, { status: 200 })
+      if (existingCctp.status === 'cctp_mint_failed')
+        return Response.json({ error: 'CCTP mint failed.', txHash: existingCctp.txHash }, { status: 409 })
+      if (existingCctp.status === 'failed')
+        return Response.json({ error: 'CCTP payment failed on source.', txHash: existingCctp.txHash }, { status: 409 })
+      if (existingCctp.rawTx && existingCctp.txHash) {
+        try {
+          await rpcCall(this.#rpcUrl, 'eth_sendRawTransaction', [existingCctp.rawTx])
+        } catch { /* already known */ }
+        return Response.json({ txHash: existingCctp.txHash, status: existingCctp.status }, { status: 202 })
+      }
+      return Response.json({
+        error: 'CCTP payment in indeterminate state (crash before signing).',
+        cctpIntentKey: existingCctp.cctpIntentKey,
+      }, { status: 503 })
+    }
+
+    // Same-table different-intent conflict: same signer+escrowNonce, different intent
+    if (cctpSameNonceConflict) {
+      const cctpTerminal = cctpSameNonceConflict.status === 'cctp_mint_confirmed' ||
+                           cctpSameNonceConflict.status === 'cctp_mint_failed' ||
+                           cctpSameNonceConflict.status === 'failed'
+      if (!cctpTerminal) {
+        return Response.json({
+          error: 'Conflicting CCTP intent: a different CCTP payment is already recorded for this signer+escrowNonce.',
+          existingTxHash: cctpSameNonceConflict.txHash,
+        }, { status: 409 })
+      }
+    }
+
+    // Cross-table conflict checks
+    if (legacyConflict || legacyConflictByKey) {
+      const row = legacyConflict ?? legacyConflictByKey!
+      const terminal = row.status === 'confirmed' || row.status === 'failed'
+      if (!terminal) {
+        return Response.json({
+          error: 'Conflicting legacy payment: this signer+nonce is in use by a direct Arc payment.',
+          existingTxHash: row.txHash,
+        }, { status: 409 })
+      }
+    }
+
+    // On-chain validation
+    let linkInfo: { active: boolean; balance: bigint; feeBalance: bigint; expiry: bigint }
+    let nonceUsed: boolean
+    try {
+      const [linkHex, usedHex] = await Promise.all([
+        rpcCall(this.#rpcUrl, 'eth_call', [{
+          to: this.#contractAddress,
+          data: this.#encodeLinkInfoCall(signerAddress as Address),
+        }, 'latest']) as Promise<string>,
+        rpcCall(this.#rpcUrl, 'eth_call', [{
+          to: this.#contractAddress,
+          data: this.#encodeUsedNonces(signerAddress as Address, escrowNonce),
+        }, 'latest']) as Promise<string>,
+      ])
+      linkInfo  = this.#decodeLinkInfo(linkHex)
+      nonceUsed = BigInt(usedHex || '0x0') !== 0n
+    } catch {
+      return Response.json({ error: 'RPC unavailable. Retry later.' }, { status: 503 })
+    }
+
+    if (nonceUsed)
+      return Response.json({ error: 'Escrow nonce already used on-chain.' }, { status: 409 })
+    if (!linkInfo.active)
+      return Response.json({ error: 'Link is not active.' }, { status: 400 })
+    const nowS = BigInt(Math.floor(Date.now() / 1000))
+    if (nowS >= linkInfo.expiry)
+      return Response.json({ error: 'Link has expired.' }, { status: 400 })
+    if (nowS >= quoteExpiry)
+      return Response.json({ error: 'Quote has expired on submission.' }, { status: 400 })
+    if (grossAmount > linkInfo.balance)
+      return Response.json({
+        error: `grossAmount ${grossAmount} exceeds link balance ${linkInfo.balance}.`,
+      }, { status: 400 })
+    if (relayFee > linkInfo.feeBalance)
+      return Response.json({
+        error: `relayFee ${relayFee} exceeds feeBalance ${linkInfo.feeBalance}.`,
+      }, { status: 400 })
+
+    // Simulation: call routePayment on router
+    const routerCalldata = encodeCctpRoutePayment(
+      signerAddress as Address, grossAmount, maxCctpFee, relayFee,
+      quoteExpiry, escrowNonce, destinationDomain,
+      mintRecipient as Address, paymentSig as Hex, cctpSig as Hex,
+    )
+    try {
+      await rpcCall(this.#rpcUrl, 'eth_call', [{
+        to: this.#cctpRouterAddress,
+        data: routerCalldata,
+        from: this.#relayAddress,
+      }, 'latest'])
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : ''
+      const safe = [
+        'InvalidSignature','InsufficientBalance','NonceUsed','QuoteExpired',
+        'WrongFeeRecipient','WrongSourceChain','ZeroRecipient','ZeroRelayFee',
+        'AmountNotGreaterThanFee','UnsupportedDestination','InvalidCctpSignature',
+        'WrongRelayer',
+      ].find(n => msg.includes(n)) ?? 'Simulation reverted'
+      return Response.json({ error: `CCTP simulation failed: ${safe}` }, { status: 400 })
+    }
+
+    // Relay wallet nonce
+    let rpcNonce: number
+    try {
+      const hex = await rpcCall(
+        this.#rpcUrl, 'eth_getTransactionCount', [this.#relayAddress, 'pending']
+      ) as string
+      rpcNonce = parseInt(hex, 16)
+    } catch {
+      return Response.json({ error: 'RPC unavailable (nonce read). Retry later.' }, { status: 503 })
+    }
+
+    if (this.#reservedNonces.has(rpcNonce)) {
+      const holder = this.#reservedNonces.get(rpcNonce)!
+      return Response.json({
+        error: 'Relay nonce reserved for an unresolved tx. Retry after it confirms.',
+        reservedBy: holder,
+      }, { status: 503 })
+    }
+
+    // Gas price + stale-fee guard
+    let gasPrice: bigint
+    try {
+      gasPrice = BigInt(await rpcCall(this.#rpcUrl, 'eth_gasPrice', []) as string)
+    } catch { gasPrice = CCTP_GAS_FLOOR }
+    if (gasPrice < CCTP_GAS_FLOOR) gasPrice = CCTP_GAS_FLOOR
+
+    const gasLimit   = CCTP_QUOTE_GAS_CEILING
+    const gasCost18  = gasLimit * gasPrice
+    const actualCost6 = (gasCost18 + CCTP_USDC_SCALE - 1n) / CCTP_USDC_SCALE
+    const requiredRelayFee = actualCost6 + this.#feeMarginUsdc
+
+    if (actualCost6 > this.#maxFeeUsdc)
+      return Response.json({
+        error: `Gas cost (${actualCost6}) exceeds relay max (${this.#maxFeeUsdc}). Retry later.`,
+      }, { status: 503 })
+    if (relayFee < requiredRelayFee)
+      return Response.json({
+        error: `relayFee (${relayFee}) no longer covers relay cost (${requiredRelayFee}). Fetch a new quote.`,
+        requiredRelayFee: requiredRelayFee.toString(),
+      }, { status: 400 })
+
+    // Sign raw transaction (router contract, routePayment calldata)
+    const account = privateKeyToAccount(this.#privateKey)
+    const rawTx = await account.signTransaction({
+      to: this.#cctpRouterAddress as Address,
+      data: routerCalldata,
+      nonce: rpcNonce,
+      gasPrice,
+      gas: gasLimit,
+      chainId: this.#chainId,
+      type: 'legacy',
+    })
+    const txHash = keccak256(rawTx)
+
+    // Persist BEFORE broadcast (same sequence as legacy)
+    const now2 = Date.now()
+
+    try {
+      const currentAlarm = await this.state.storage.getAlarm()
+      if (!currentAlarm) {
+        await this.state.storage.setAlarm(Date.now() + 15_000)
+      }
+    } catch {
+      return Response.json({ error: 'Storage error (alarm). Retry.' }, { status: 503 })
+    }
+
+    try {
+      this.state.storage.sql.exec(
+        `INSERT INTO cctp_journal (
+          cctpIntentKey, legacyRelayKey, signerAddress, destinationDomain, mintRecipient,
+          grossAmount, maxCctpFee, relayFee, relayerAddress, quoteExpiry, escrowNonce,
+          paymentSig, cctpSig, relayNonce, chainId, routerAddress,
+          rawTx, txHash, status, createdAt, updatedAt
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        cctpIntentKey, legacyRelayKey,
+        signerAddress.toLowerCase(), destinationDomain, mintRecipient.toLowerCase(),
+        grossAmount.toString(), maxCctpFee.toString(), relayFee.toString(),
+        this.#relayAddress.toLowerCase(), quoteExpiry.toString(), escrowNonce.toString(),
+        paymentSig, cctpSig,
+        rpcNonce, this.#chainId, (this.#cctpRouterAddress as string).toLowerCase(),
+        rawTx, txHash, 'pending', now2, now2,
+      )
+    } catch (e) {
+      console.error('[relay-do] cctp persist failed:', (e instanceof Error) ? e.constructor.name : 'unknown')
+      return Response.json({ error: 'Storage error. Retry.' }, { status: 503 })
+    }
+
+    this.#reservedNonces.set(rpcNonce, legacyRelayKey)
+
+    // Broadcast
+    let broadcastOk = false
+    try {
+      await rpcCall(this.#rpcUrl, 'eth_sendRawTransaction', [rawTx])
+      broadcastOk = true
+    } catch (e) {
+      const eName = e instanceof Error ? e.constructor.name : 'unknown'
+      console.error('[relay-do] cctp broadcast type:', eName, 'txHash:', txHash)
+    }
+
+    if (broadcastOk) {
+      this.state.storage.sql.exec(
+        `UPDATE cctp_journal SET status='broadcast', updatedAt=? WHERE cctpIntentKey=?`,
+        Date.now(), cctpIntentKey,
+      )
+    }
+
+    return Response.json({ txHash, status: 'pending' }, { status: 202 })
+  }
+
+  // ── CCTP Status ──────────────────────────────────────────────────────────
+
+  async #handleCctpStatus(url: URL): Promise<Response> {
+    try { this.#assertReady() } catch {
+      return Response.json({ error: 'Relay not available.' }, { status: 503 })
+    }
+
+    const txHash = url.searchParams.get('txHash')
+    const cctpIntentKey = url.searchParams.get('cctpIntentKey')
+
+    if (!txHash && !cctpIntentKey)
+      return Response.json({ error: 'Provide txHash or cctpIntentKey.' }, { status: 400 })
+
+    let row: CctpJournalEntry | null = null
+    if (cctpIntentKey) {
+      row = this.#getCctpRow(cctpIntentKey)
+    } else if (txHash) {
+      const rows = [...this.state.storage.sql.exec<CctpJournalEntry>(
+        `SELECT * FROM cctp_journal WHERE txHash=?`, txHash
+      )]
+      row = rows[0] ?? null
+    }
+
+    if (!row)
+      return Response.json({ error: 'CCTP payment not found.' }, { status: 404 })
+
+    // Safe public status — never expose raw sigs or full journal
+    return Response.json({
+      status:            row.status,
+      txHash:            row.txHash,
+      sourceTxHash:      row.sourceTxHash,
+      destTxHash:        row.destTxHash,
+      netAmountDelivered: row.netAmountDelivered,
+      destinationDomain: row.destinationDomain,
+      mintRecipient:     row.mintRecipient,
+      grossAmount:       row.grossAmount,
+      maxCctpFee:        row.maxCctpFee,
+      createdAt:         row.createdAt,
+      updatedAt:         row.updatedAt,
+      ...(row.errorMsg ? { errorMsg: row.errorMsg } : {}),
+    })
   }
 }

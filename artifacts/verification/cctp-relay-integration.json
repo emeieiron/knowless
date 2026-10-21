@@ -1,0 +1,51 @@
+{
+  "generated": "2026-10-21",
+  "tests": {
+    "tsTests": {
+      "pass": 41,
+      "fail": 0,
+      "files": [
+        "src/lib/parsePaymentRequest.test.ts",
+        "src/lib/cctp.test.ts"
+      ]
+    },
+    "workerLegacySmoke": {
+      "pass": 8,
+      "fail": 0
+    },
+    "workerCctpSmoke": {
+      "pass": 14,
+      "fail": 0,
+      "newTests": [
+        "C2b desiredNetAmount",
+        "C8b status mapping",
+        "C8c wrong params 400"
+      ]
+    }
+  },
+  "typecheck": {
+    "errors": 0
+  },
+  "build": {
+    "exitCode": 0,
+    "timeS": 15.84
+  },
+  "routerAddress": "0xd75a607d9f99a35fadbfd3caf077918265ab59ab",
+  "routerImmutables": {
+    "escrow": "0xbe223821c0925e87cde1ca397fdce253a8ce7b22",
+    "usdc": "0x3600000000000000000000000000000000000000",
+    "tokenMessenger": "0x8fe6b999dc680ccfdd5bf7eb0974218be2542daa"
+  },
+  "fixes": [
+    "#handleCctpQuote: accepts desiredNetAmount; gross=desiredNet+maxCctpFee (fee not deducted from recipient)",
+    "#runCctpAlarm: triggers dest proof from forwardTxHash presence, not forwardState enum",
+    "PayScreen poll: uses txHash param; skips poll until txHash known",
+    "PayScreen: explicit cctp_*/server\u2192UI status mapping (broadcast\u2192pending, cctp_source_confirmed\u2192source_confirmed etc)",
+    "PayScreen: netAmountDelivered displayed as formatUnits(BigInt(v),6) not raw integer",
+    "FundFromChain: approval receipt polled before burn (max 90s)",
+    "FundFromChain: unknown burn hash \u2192 indeterminate state (not generic retry)",
+    "FundFromChain: SOURCE_CHAINS include rpcUrl for approval receipt polling",
+    "CctpPayoutStatus: mint_failed added to union type"
+  ],
+  "coverage": "Miniflare+SQLite DO smoke; no live browser/camera/wallet/funded transfer tested."
+}

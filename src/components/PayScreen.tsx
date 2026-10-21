@@ -48,9 +48,16 @@ import {
 } from '../lib/format'
 import { useRelayQuote } from '../hooks/useRelayQuote'
 import { usePendingIntent } from '../hooks/usePendingIntent'
+import { useCctpPendingIntent, type CctpPayoutStatus } from '../hooks/useCctpPendingIntent'
 import { QrScanner } from './QrScanner'
 import { parsePaymentRequest } from '../lib/parsePaymentRequest'
-
+import {
+  DESTINATION_DOMAIN_LABELS,
+  SUPPORTED_DESTINATION_DOMAINS,
+  computeCctpPaymentDigest,
+  cctpPaymentDomain,
+  ARC_TESTNET_CHAIN_ID as CCTP_ARC_CHAIN_ID,
+} from '../lib/cctp'
 type PayScreenMode = 'scan' | 'review'
 
 const ARC_EXPLORER = 'https://explorer.testnet.arc.io' // arc-studio-allow-onchain-literal
@@ -111,6 +118,21 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
   const [amountError, setAmountError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
+
+  // Destination network selector: null = Arc (direct), 0 = Eth Sepolia, 6 = Base Sepolia
+  const [destDomain, setDestDomain] = useState<number | null>(null)
+
+  // CCTP quote state
+  const [cctpQuote, setCctpQuote] = useState<{
+    grossAmount: string; maxCctpFee: string; relayFee: string
+    minDestReceived: string; relayerAddress: string; quoteExpiry: number
+    quoteToken: string; routerAddress: string
+  } | null>(null)
+  const [cctpQuoteLoading, setCctpQuoteLoading] = useState(false)
+  const [cctpQuoteError, setCctpQuoteError] = useState('')
+
+  // CCTP pending intent
+  const { intent: cctpIntent, saveIntent: saveCctpIntent, updateStatus: updateCctpStatus, clearIntent: clearCctpIntent } = useCctpPendingIntent(signerAddress)
 
   // Chain reads
   const { data: linkInfoRaw, isLoading: isLinkLoading, isError: isLinkError, refetch: refetchLink } = useReadContract({
@@ -296,6 +318,193 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
     }
   }, [intent, submitting, updateTxHash])
 
+  // ── CCTP quote fetch ────────────────────────────────────────────────────
+  // Fetches a CCTP quote when destDomain is non-null + we have recipient + amount
+  const handleFetchCctpQuote = useCallback(async () => {
+    if (destDomain === null || !signerAddress || !recipient || !parsedAmount || parsedAmount <= 0n) return
+    if (!isValidAddress(recipient)) return
+
+    setCctpQuoteLoading(true)
+    setCctpQuoteError('')
+    setCctpQuote(null)
+    try {
+      // grossAmount: desiredNet + maxCctpFee. We'll use parsedAmount as desired net.
+      // The quote API takes grossAmount; we need to request a quote first to get maxCctpFee,
+      // then compute gross = desired + maxCctpFee. For simplicity in this version, we pass
+      // parsedAmount as grossAmount (the user's amount is the gross debit from link).
+      const params = new URLSearchParams({
+        signerAddress,
+        destinationDomain: destDomain.toString(),
+        mintRecipient: recipient,
+        desiredNetAmount: parsedAmount.toString(),
+      })
+      const res = await fetch(`/relay/cctp/quote?${params.toString()}`, {
+        headers: { Accept: 'application/json' },
+      })
+      if (!res.ok) {
+        const data = await res.json() as { error?: string }
+        setCctpQuoteError(data.error ?? `CCTP quote failed (${res.status})`)
+        return
+      }
+      const data = await res.json() as {
+        grossAmount: string; maxCctpFee: string; relayFee: string
+        minDestReceived: string; relayerAddress: string; quoteExpiry: number
+        quoteToken: string; routerAddress: string
+      }
+      setCctpQuote(data)
+    } catch (e) {
+      setCctpQuoteError(`CCTP quote unavailable: ${(e as Error).message}`)
+    } finally {
+      setCctpQuoteLoading(false)
+    }
+  }, [destDomain, signerAddress, recipient, parsedAmount])
+
+  // Refetch CCTP quote when inputs change
+  useEffect(() => {
+    if (destDomain === null || !parsedAmount || parsedAmount <= 0n) {
+      setCctpQuote(null)
+      setCctpQuoteError('')
+      return
+    }
+    void handleFetchCctpQuote()
+  }, [destDomain, parsedAmount, recipient]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── CCTP Pay handler ────────────────────────────────────────────────────
+  const handleCctpPay = useCallback(async () => {
+    if (submitting || cctpIntent) return
+    if (!validate()) return
+    if (!privateKey || !signerAddress || parsedAmount === null || !domainSep) return
+    if (!cctpQuote) { setSubmitError('Waiting for CCTP quote. Try again.'); return }
+    if (destDomain === null) return
+
+    const now = Math.floor(Date.now() / 1000)
+    if (cctpQuote.quoteExpiry < now + 30) {
+      setSubmitError('CCTP quote expired. Refreshing…')
+      void handleFetchCctpQuote()
+      return
+    }
+
+    setSubmitting(true)
+    setSubmitError('')
+
+    try {
+      const nonce = generateNonce()
+      const grossAmount = BigInt(cctpQuote.grossAmount)
+      const maxCctpFee  = BigInt(cctpQuote.maxCctpFee)
+      if (grossAmount > balance) {
+        setSubmitError(`Insufficient balance: link has ${formatUsdcFixed(balance)} USDC, gross is ${formatUnits(grossAmount, 6)} USDC.`)
+        setSubmitting(false)
+        return
+      }
+      const relayFee    = BigInt(cctpQuote.relayFee)
+      const relayerAddr = cctpQuote.relayerAddress as Address
+      const routerAddr  = cctpQuote.routerAddress as Address
+      const quoteExpiry = BigInt(cctpQuote.quoteExpiry)
+
+      // Sign legacy PaymentAuth: recipient=router, feeRecipient=router, fee=relayFee
+      const paymentSig = await signPaymentAuth(
+        privateKey, contractAddress, signerAddress,
+        routerAddr,   // recipient = router
+        grossAmount,  // amount = gross (escrow deducts this)
+        relayFee,     // fee = relay fee (from fee budget)
+        routerAddr,   // feeRecipient = router
+        quoteExpiry,
+        nonce,
+        BigInt(expiryTs), BigInt(chainId), domainSep
+      )
+
+      // Sign CctpPayment struct
+      // domain derived inside computeCctpPaymentDigest via second arg
+      const digest  = computeCctpPaymentDigest({
+        signerAddress,
+        destinationDomain: destDomain,
+        mintRecipient:     recipient as Address,
+        grossAmount,
+        maxCctpFee,
+        relayFee,
+        relayer:           relayerAddr,
+        quoteExpiry,
+        nonce,
+        escrow:            contractAddress,
+        chainId:           BigInt(chainId),
+      }, routerAddr)
+      const { sign } = await import('viem/accounts')
+      const sigObj    = await sign({ hash: digest, privateKey })
+      const r = sigObj.r.slice(2).padStart(64, '0')
+      const s = sigObj.s.slice(2).padStart(64, '0')
+      const v = Number(sigObj.v).toString(16).padStart(2, '0')
+      const cctpSig = `0x${r}${s}${v}` as Hex
+
+      // Build submit body once — exact retry reuses this (no new nonce/sig)
+      const submitBody = JSON.stringify({
+        signerAddress, destinationDomain: destDomain,
+        mintRecipient: recipient,
+        grossAmount: grossAmount.toString(), maxCctpFee: maxCctpFee.toString(),
+        relayFee: relayFee.toString(), quoteExpiry: quoteExpiry.toString(),
+        escrowNonce: nonce.toString(), paymentSig, cctpSig,
+        chainId, quoteToken: cctpQuote.quoteToken,
+      })
+      // Persist BEFORE submitting
+      const persistErr = saveCctpIntent({
+        signerAddress,
+        destinationDomain: destDomain,
+        mintRecipient:     recipient,
+        grossAmount:       grossAmount.toString(),
+        maxCctpFee:        maxCctpFee.toString(),
+        relayFee:          relayFee.toString(),
+        escrowNonce:       nonce.toString(),
+        txHash:            null,
+        sourceTxHash:      null,
+        destTxHash:        null,
+        netAmountDelivered: null,
+        status:            'submitting',
+        quoteExpiry:       cctpQuote.quoteExpiry,
+        routerAddress:     routerAddr,
+        relayerAddress:    relayerAddr,
+        submitBody,
+      })
+      if (persistErr) {
+        setSubmitError(`Cannot save CCTP intent: ${persistErr}`)
+        setSubmitting(false)
+        return
+      }
+
+      // Submit to relay
+      const res = await fetch('/relay/cctp/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: submitBody,
+      })
+
+      const data = await res.json() as { txHash?: string; status?: string; error?: string }
+
+      if (!res.ok) {
+        if (res.status >= 500) {
+          setSubmitError(data.error ?? `Relay error (${res.status}). Use Retry to resubmit.`)
+        } else {
+          updateCctpStatus(null, 'failed')
+          setSubmitError(data.error ?? `CCTP error (${res.status})`)
+        }
+        setSubmitting(false)
+        return
+      }
+
+      if (data.txHash) {
+        updateCctpStatus(data.txHash, 'pending')
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : ''
+      updateCctpStatus(null, 'failed')
+      setSubmitError(msg.includes('rejected') || msg.includes('cancel') ? 'Signing cancelled.' : `Error: ${msg.slice(0, 120)}`)
+    } finally {
+      setSubmitting(false)
+    }
+  }, [
+    submitting, cctpIntent, validate, privateKey, signerAddress, parsedAmount,
+    domainSep, cctpQuote, destDomain, handleFetchCctpQuote, contractAddress,
+    recipient, expiryTs, chainId, saveCctpIntent, updateCctpStatus,
+  ])
+
   // ── Scanner callbacks ──────────────────────────────────────────────────
   // Called by QrScanner with decoded QR text. Returns true = accepted (camera stops), false = keep scanning.
   const handleQrScan = useCallback((text: string): boolean => {
@@ -329,7 +538,175 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
     setMode('scan')
   }, [])
 
+  // ── CCTP poll loop ─────────────────────────────────────────────────────
+  // Polls /relay/cctp/status when a CCTP intent is pending/source_confirmed/mint_pending.
+  // Runs at component level so it survives mode changes. Clears on mint_confirmed/failed.
+  const cctpPollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (!cctpIntent) return
+    const pollable = ['submitting', 'pending', 'source_confirmed', 'mint_pending'] as CctpPayoutStatus[]
+    if (!pollable.includes(cctpIntent.status)) return
+
+    let cancelled = false
+    const doPoll = async () => {
+      if (cancelled) return
+      try {
+        // Status endpoint accepts txHash (preferred) or cctpIntentKey.
+        // If txHash not yet known (POST still in flight), skip until it resolves.
+        if (!cctpIntent.txHash) {
+          cctpPollRef.current = setTimeout(() => { void doPoll() }, 2000)
+          return
+        }
+        const params = new URLSearchParams({ txHash: cctpIntent.txHash })
+        const res = await fetch(`/relay/cctp/status?${params.toString()}`, {
+          headers: { Accept: 'application/json' },
+        })
+        if (res.ok && !cancelled) {
+          const d = await res.json() as {
+            status?: string; txHash?: string; sourceTxHash?: string
+            destTxHash?: string; netAmountDelivered?: string; error?: string
+          }
+          // Map server status names (cctp_* prefixed) to UI CctpPayoutStatus
+          const SERVER_STATUS_MAP: Record<string, CctpPayoutStatus> = {
+            pending:               'pending',
+            broadcast:             'pending',
+            cctp_source_confirmed: 'source_confirmed',
+            cctp_mint_pending:     'mint_pending',
+            cctp_mint_confirmed:   'mint_confirmed',
+            cctp_mint_failed:      'mint_failed',
+            failed:                'mint_failed',
+          }
+          const rawStatus = d.status ?? ''
+          const st: CctpPayoutStatus | undefined = SERVER_STATUS_MAP[rawStatus]
+          if (st && st !== cctpIntent.status) {
+            updateCctpStatus(
+              d.txHash ?? cctpIntent.txHash,
+              st,
+              { sourceTxHash: d.sourceTxHash ?? undefined,
+                destTxHash:   d.destTxHash ?? undefined,
+                netAmountDelivered: d.netAmountDelivered ?? undefined },
+            )
+          }
+        }
+      } catch { /* network error — keep polling */ }
+      if (!cancelled) {
+        const interval = cctpIntent.status === 'mint_pending' ? 8000 : 4000
+        cctpPollRef.current = setTimeout(() => { void doPoll() }, interval)
+      }
+    }
+    void doPoll()
+    return () => { cancelled = true; if (cctpPollRef.current) clearTimeout(cctpPollRef.current) }
+  }, [cctpIntent?.status, cctpIntent?.signerAddress, cctpIntent?.escrowNonce, updateCctpStatus]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // CCTP retry: resend exact stored submitBody, no new sig
+  const handleCctpRetry = useCallback(async () => {
+    if (!cctpIntent?.submitBody || submitting) return
+    setSubmitting(true)
+    setSubmitError('')
+    try {
+      const res = await fetch('/relay/cctp/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: cctpIntent.submitBody,
+      })
+      const data = await res.json() as { txHash?: string; status?: string; error?: string }
+      if (data.txHash) updateCctpStatus(data.txHash, 'pending')
+      else if (!res.ok) setSubmitError(data.error ?? `Relay error (${res.status})`)
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message.slice(0, 120) : 'Relay unreachable.')
+    } finally {
+      setSubmitting(false)
+    }
+  }, [cctpIntent, submitting, updateCctpStatus])
+
   // ── Render ─────────────────────────────────────────────────────────────
+
+  // CCTP pending states: always take precedence (block new spend, show progress)
+  if (cctpIntent && cctpIntent.status !== 'failed') {
+    const isMintConfirmed = cctpIntent.status === 'mint_confirmed'
+    const isSourceConfirmed = cctpIntent.status === 'source_confirmed' || cctpIntent.status === 'mint_pending' || isMintConfirmed
+    const destLabel = DESTINATION_DOMAIN_LABELS[cctpIntent.destinationDomain] ?? `Domain ${cctpIntent.destinationDomain}`
+    const ARC_EXPLORER_BASE = 'https://explorer.testnet.arc.io' // arc-studio-allow-onchain-literal
+    const ETH_SEP_EXPLORER  = 'https://sepolia.etherscan.io'    // arc-studio-allow-onchain-literal
+    const BASE_SEP_EXPLORER = 'https://sepolia.basescan.org'    // arc-studio-allow-onchain-literal
+    const destExplorer = cctpIntent.destinationDomain === 0 ? ETH_SEP_EXPLORER : BASE_SEP_EXPLORER
+
+    if (isMintConfirmed) {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-dvh px-6 gap-5 text-center reveal">
+          <div className="w-16 h-16 rounded-full flex items-center justify-center text-2xl"
+            style={{ background: 'rgba(26,128,71,0.1)' }}>✓</div>
+          <p className="text-3xl font-bold tabular-nums display" style={{ color: 'var(--ink)' }}>
+            {cctpIntent.netAmountDelivered
+              ? `${formatUnits(BigInt(cctpIntent.netAmountDelivered), 6)} USDC`
+              : 'Delivered'}
+          </p>
+          <p className="text-sm" style={{ color: 'var(--muted)' }}>
+            Received on {destLabel} by {truncateAddress(cctpIntent.mintRecipient)}
+          </p>
+          {cctpIntent.sourceTxHash && (
+            <a href={`${ARC_EXPLORER_BASE}/tx/${cctpIntent.sourceTxHash}`}
+              target="_blank" rel="noopener noreferrer"
+              className="text-xs underline" style={{ color: 'var(--accent)' }}>
+              Source tx (Arc)
+            </a>
+          )}
+          {cctpIntent.destTxHash && (
+            <a href={`${destExplorer}/tx/${cctpIntent.destTxHash}`}
+              target="_blank" rel="noopener noreferrer"
+              className="text-xs underline" style={{ color: 'var(--accent)' }}>
+              Destination tx ({destLabel})
+            </a>
+          )}
+          <button type="button" onClick={clearCctpIntent}
+            className="text-xs underline mt-2" style={{ color: 'var(--muted)' }}>
+            Done
+          </button>
+        </div>
+      )
+    }
+
+    return (
+      <div className="flex flex-col items-center justify-center min-h-dvh px-6 gap-5 text-center">
+        <div className="w-10 h-10 rounded-full border-2 animate-spin"
+          style={{ borderColor: 'var(--accent)', borderTopColor: 'transparent' }} />
+        <p className="font-semibold text-lg display" style={{ color: 'var(--ink)' }}>
+          {isSourceConfirmed ? 'Bridging to destination…' : 'Confirming source payment…'}
+        </p>
+        <p className="text-sm max-w-xs" style={{ color: 'var(--muted)' }}>
+          {formatUnits(BigInt(cctpIntent.grossAmount), 6)} USDC → {destLabel}
+          {' · '}min {formatUnits(BigInt(cctpIntent.grossAmount) - BigInt(cctpIntent.maxCctpFee), 6)} USDC received
+        </p>
+        {cctpIntent.sourceTxHash && (
+          <a href={`${ARC_EXPLORER_BASE}/tx/${cctpIntent.sourceTxHash}`}
+            target="_blank" rel="noopener noreferrer"
+            className="text-xs underline" style={{ color: 'var(--accent)' }}>
+            Source tx (Arc)
+          </a>
+        )}
+        {cctpIntent.txHash && !cctpIntent.sourceTxHash && (
+          <a href={`${ARC_EXPLORER_BASE}/tx/${cctpIntent.txHash}`}
+            target="_blank" rel="noopener noreferrer"
+            className="text-xs underline" style={{ color: 'var(--subtle)' }}>
+            Router tx
+          </a>
+        )}
+        {submitError && (
+          <p role="alert" className="text-xs" style={{ color: 'var(--danger)' }}>{submitError}</p>
+        )}
+        {cctpIntent.submitBody && (
+          <button type="button" onClick={() => { void handleCctpRetry() }}
+            disabled={submitting}
+            className="rounded-xl px-4 py-2 text-xs font-medium disabled:opacity-50"
+            style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--ink)', minHeight: '36px' }}>
+            {submitting ? 'Retrying…' : 'Retry relay'}
+          </button>
+        )}
+        <p className="text-xs" style={{ color: 'var(--subtle)' }}>Do not close this tab. Same signed authorization — no new payment.</p>
+      </div>
+    )
+  }
 
   if (isLinkInvalid) {
     return (
@@ -605,6 +982,29 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
             Scan again
           </button>
         )}
+        {/* Network selector */}
+        <div>
+          <label className="block text-sm font-medium mb-2" style={{ color: 'var(--ink-2)' }}>
+            Destination network
+          </label>
+          <div className="flex gap-2 flex-wrap">
+            {([null, ...SUPPORTED_DESTINATION_DOMAINS] as Array<number | null>).map(d => (
+              <button key={d ?? 'arc'} type="button"
+                onClick={() => { setDestDomain(d); setCctpQuote(null); setCctpQuoteError('') }}
+                disabled={isSubmitting}
+                className="rounded-xl px-3 py-2 text-sm font-medium transition-colors disabled:opacity-40"
+                style={{
+                  background: destDomain === d ? 'var(--accent)' : 'var(--surface)',
+                  color:      destDomain === d ? '#fff' : 'var(--ink)',
+                  border:     `1px solid ${destDomain === d ? 'var(--accent)' : 'var(--border)'}`,
+                  minHeight: '40px',
+                }}>
+                {d === null ? 'Arc Testnet' : (DESTINATION_DOMAIN_LABELS[d] ?? `Domain ${d}`)}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Balance card */}
         {isLinkReady && (
           <div className="rounded-2xl px-5 py-5 text-center"
@@ -684,37 +1084,88 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
           )}
         </div>
 
-        {/* Per-payment fee quote */}
-        <div className="rounded-xl px-4 py-3 text-xs"
-          style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
-          {isLoadingQuote ? (
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full border animate-spin"
-                style={{ borderColor: 'var(--border-strong)', borderTopColor: 'transparent' }} />
-              <span style={{ color: 'var(--muted)' }}>Fetching relay fee…</span>
-            </div>
-          ) : feeQuote ? (
-            <>
-              <div className="flex justify-between">
-                <span style={{ color: 'var(--muted)' }}>Relay fee (from fee budget)</span>
-                <span className="tabular-nums font-medium" style={{ color: 'var(--ink-2)' }}>
-                  {formatUsdcFixed(feeQuote.quotedFee)} USDC
-                </span>
+        {/* Fee / quote section — depends on destination network */}
+        {destDomain === null ? (
+          /* Arc direct — legacy relay fee quote */
+          <div className="rounded-xl px-4 py-3 text-xs"
+            style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+            {isLoadingQuote ? (
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full border animate-spin"
+                  style={{ borderColor: 'var(--border-strong)', borderTopColor: 'transparent' }} />
+                <span style={{ color: 'var(--muted)' }}>Fetching relay fee…</span>
               </div>
-              <div className="flex justify-between mt-1">
-                <span style={{ color: 'var(--subtle)' }}>Fee budget remaining</span>
-                <span className="tabular-nums" style={{ color: 'var(--subtle)' }}>
-                  {formatUsdcFixed(feeQuote.feeBalance)} USDC
-                </span>
+            ) : feeQuote ? (
+              <>
+                <div className="flex justify-between">
+                  <span style={{ color: 'var(--muted)' }}>Relay fee (from fee budget)</span>
+                  <span className="tabular-nums font-medium" style={{ color: 'var(--ink-2)' }}>
+                    {formatUsdcFixed(feeQuote.quotedFee)} USDC
+                  </span>
+                </div>
+                <div className="flex justify-between mt-1">
+                  <span style={{ color: 'var(--subtle)' }}>Fee budget remaining</span>
+                  <span className="tabular-nums" style={{ color: 'var(--subtle)' }}>
+                    {formatUsdcFixed(feeQuote.feeBalance)} USDC
+                  </span>
+                </div>
+                <p className="mt-1" style={{ color: 'var(--subtle)' }}>
+                  Quote valid until {new Date(feeQuote.quoteExpiry * 1000).toLocaleTimeString()}
+                </p>
+              </>
+            ) : (
+              <p style={{ color: 'var(--danger)' }}>{quoteError ?? 'Quote unavailable'}</p>
+            )}
+          </div>
+        ) : (
+          /* Cross-chain CCTP quote */
+          <div className="rounded-xl px-4 py-3 text-xs space-y-1"
+            style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+            {cctpQuoteLoading ? (
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full border animate-spin"
+                  style={{ borderColor: 'var(--border-strong)', borderTopColor: 'transparent' }} />
+                <span style={{ color: 'var(--muted)' }}>Fetching CCTP quote…</span>
               </div>
-              <p className="mt-1" style={{ color: 'var(--subtle)' }}>
-                Quote valid until {new Date(feeQuote.quoteExpiry * 1000).toLocaleTimeString()}
-              </p>
-            </>
-          ) : (
-            <p style={{ color: 'var(--danger)' }}>{quoteError ?? 'Quote unavailable'}</p>
-          )}
-        </div>
+            ) : cctpQuote ? (
+              <>
+                <div className="flex justify-between">
+                  <span style={{ color: 'var(--muted)' }}>You enter (min recipient)</span>
+                  <span className="tabular-nums font-medium" style={{ color: 'var(--ink)' }}>
+                    {formatUnits(BigInt(cctpQuote.minDestReceived), 6)} USDC
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span style={{ color: 'var(--muted)' }}>Gross debit from link</span>
+                  <span className="tabular-nums" style={{ color: 'var(--ink-2)' }}>
+                    {formatUnits(BigInt(cctpQuote.grossAmount), 6)} USDC
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span style={{ color: 'var(--subtle)' }}>Max bridge fee</span>
+                  <span className="tabular-nums" style={{ color: 'var(--subtle)' }}>
+                    ≤ {formatUnits(BigInt(cctpQuote.maxCctpFee), 6)} USDC
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span style={{ color: 'var(--subtle)' }}>Relay fee (from budget)</span>
+                  <span className="tabular-nums" style={{ color: 'var(--subtle)' }}>
+                    {formatUnits(BigInt(cctpQuote.relayFee), 6)} USDC
+                  </span>
+                </div>
+                <p className="mt-1" style={{ color: 'var(--subtle)' }}>
+                  Quote valid until {new Date(cctpQuote.quoteExpiry * 1000).toLocaleTimeString()}
+                </p>
+              </>
+            ) : cctpQuoteError ? (
+              <p style={{ color: 'var(--danger)' }}>{cctpQuoteError}</p>
+            ) : parsedAmount && parsedAmount > 0n ? (
+              <p style={{ color: 'var(--muted)' }}>Enter a recipient address to fetch quote</p>
+            ) : (
+              <p style={{ color: 'var(--muted)' }}>Enter an amount to fetch quote</p>
+            )}
+          </div>
+        )}
 
         {/* Submit error */}
         {submitError && (
@@ -724,21 +1175,38 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
         )}
 
         {/* Pay button */}
-        <button
-          type="button"
-          onClick={() => { void handlePay() }}
-          disabled={isSubmitting || isLoadingQuote || !feeQuote || parsedAmount === null || !recipient || isRelayUnavailable}
-          className="w-full rounded-xl py-4 font-bold text-base transition-opacity disabled:opacity-40"
-          style={{ background: 'var(--accent)', color: '#fff', minHeight: '56px' }}
-          aria-busy={isSubmitting}>
-          {isSubmitting ? 'Sending…'
-            : isLoadingQuote ? 'Loading…'
-              : parsedAmount !== null ? `Pay ${formatUnits(parsedAmount, 6)} USDC`
-                : 'Pay'}
-        </button>
+        {destDomain === null ? (
+          <button
+            type="button"
+            onClick={() => { void handlePay() }}
+            disabled={isSubmitting || isLoadingQuote || !feeQuote || parsedAmount === null || !recipient || isRelayUnavailable}
+            className="w-full rounded-xl py-4 font-bold text-base transition-opacity disabled:opacity-40"
+            style={{ background: 'var(--accent)', color: '#fff', minHeight: '56px' }}
+            aria-busy={isSubmitting}>
+            {isSubmitting ? 'Sending…'
+              : isLoadingQuote ? 'Loading…'
+                : parsedAmount !== null ? `Pay ${formatUnits(parsedAmount, 6)} USDC on Arc`
+                  : 'Pay'}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => { void handleCctpPay() }}
+            disabled={isSubmitting || cctpQuoteLoading || !cctpQuote || parsedAmount === null || !recipient}
+            className="w-full rounded-xl py-4 font-bold text-base transition-opacity disabled:opacity-40"
+            style={{ background: 'var(--accent)', color: '#fff', minHeight: '56px' }}
+            aria-busy={isSubmitting}>
+            {isSubmitting ? 'Signing…'
+              : cctpQuoteLoading ? 'Loading…'
+                : cctpQuote ? `Pay — min ${formatUnits(BigInt(cctpQuote.minDestReceived), 6)} USDC on ${DESTINATION_DOMAIN_LABELS[destDomain]}`
+                  : 'Pay'}
+          </button>
+        )}
 
         <p className="text-xs text-center" style={{ color: 'var(--subtle)' }}>
-          No wallet needed. Signed in your browser, submitted by the relay.
+          {destDomain === null
+            ? 'No wallet needed. Signed in your browser, submitted by the relay.'
+            : 'Walletless Arc payment + CCTP bridge. Funds arrive on destination chain via Circle.'}
         </p>
       </main>
     </div>

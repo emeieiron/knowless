@@ -15,12 +15,13 @@ import { SpooklyGhost } from './SpooklyGhost'
 import { CreateLinkForm } from './CreateLinkForm'
 import { ShareLinkCard } from './ShareLinkCard'
 import { LinkCard } from './LinkCard'
+import { FundFromChain } from './FundFromChain'
 import { loadLinks } from '../lib/storage'
 import type { StoredLink } from '../lib/storage'
 import { SPOOKLY_ADDRESS_TESTNET, ARC_TESTNET_CHAIN_ID } from '../lib/contract'
 import { formatUsdcFixed, parseUsdcInput } from '../lib/format'
 
-type View = 'dashboard' | 'create' | 'share'
+type View = 'dashboard' | 'create' | 'fund' | 'share'
 
 interface SharedLink {
   url: string
@@ -74,6 +75,29 @@ export function IssuerDashboard() {
           </p>
           <ConnectKitButton label="Connect wallet" data-slot="button" />
         </div>
+      </div>
+    )
+  }
+
+  if (view === 'fund') {
+    return (
+      <div className="min-h-dvh flex flex-col">
+        <header className="sticky top-0 z-10 px-4 py-3 flex items-center gap-3"
+          style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)', backdropFilter: 'blur(12px)' }}>
+          <button type="button" onClick={() => setView('dashboard')}
+            className="text-sm font-medium"
+            style={{ color: 'var(--accent)', minWidth: '44px', minHeight: '44px', display: 'flex', alignItems: 'center' }}
+            aria-label="Back to dashboard">
+            ← Back
+          </button>
+          <h1 className="font-semibold text-base" style={{ color: 'var(--ink)' }}>Fund from another chain</h1>
+        </header>
+        <main className="flex-1 px-4 py-6 max-w-md mx-auto w-full">
+          <FundFromChain
+            onFunded={() => setView('create')}
+            onBack={() => setView('dashboard')}
+          />
+        </main>
       </div>
     )
   }
@@ -135,6 +159,12 @@ export function IssuerDashboard() {
           style={{ background: 'var(--accent)', color: '#fff', minHeight: '56px' }}>
           <Plus size={18} />
           New spendable link
+        </button>
+
+        <button type="button" onClick={() => setView('fund')}
+          className="w-full rounded-xl py-3 flex items-center justify-center gap-2 text-sm font-medium"
+          style={{ background: 'var(--surface)', color: 'var(--ink)', border: '1px solid var(--border)', minHeight: '44px' }}>
+          Fund from another chain
         </button>
 
         {links.length > 0 ? (
