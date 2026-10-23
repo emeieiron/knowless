@@ -54,14 +54,14 @@ contract KnowlessCctpRouter is ReentrancyGuard {
     /// @notice Circle TokenMessengerV2.
     ITokenMessengerV2 public immutable tokenMessenger;
 
-    /// @notice Arc Testnet EVM chain ID — enforced at call time.
-    uint256 public constant ARC_TESTNET_CHAIN_ID = 5042002;
+    /// @notice Arc Mainnet EVM chain ID — enforced at call time.
+    uint256 public constant ARC_MAINNET_CHAIN_ID = 5042;
     /// @notice Arc CCTP domain (distinct from EVM chain ID).
     uint32  public constant ARC_CCTP_DOMAIN = 26;
 
     /// @notice Allowed destination CCTP domains.
-    uint32  public constant ETH_SEPOLIA_DOMAIN  = 0;
-    uint32  public constant BASE_SEPOLIA_DOMAIN = 6;
+    uint32  public constant ETHEREUM_DOMAIN = 0;
+    uint32  public constant BASE_DOMAIN      = 6;
 
     /// @notice Standard finality threshold (2000) for the Forwarding Service.
     uint32  public constant FINALITY_THRESHOLD = 2000;
@@ -174,15 +174,15 @@ contract KnowlessCctpRouter is ReentrancyGuard {
         bytes calldata cctpSig
     ) external nonReentrant {
         // ── Source-chain guard ───────────────────────────────────────────────
-        if (block.chainid != ARC_TESTNET_CHAIN_ID) revert WrongSourceChain();
+        if (block.chainid != ARC_MAINNET_CHAIN_ID) revert WrongSourceChain();
 
         // ── Input validation ─────────────────────────────────────────────────
         if (mintRecipient == address(0))   revert ZeroRecipient();
         if (relayFee == 0)                 revert ZeroRelayFee();
         if (grossAmount <= maxCctpFee)     revert AmountNotGreaterThanFee();
         if (block.timestamp > quoteExpiry) revert QuoteExpired();
-        if (destinationDomain != ETH_SEPOLIA_DOMAIN &&
-            destinationDomain != BASE_SEPOLIA_DOMAIN)
+        if (destinationDomain != ETHEREUM_DOMAIN &&
+            destinationDomain != BASE_DOMAIN)
             revert UnsupportedDestination();
 
         // ── Verify CctpPayment signature ─────────────────────────────────────

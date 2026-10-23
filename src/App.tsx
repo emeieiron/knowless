@@ -12,7 +12,7 @@
 import { useEffect, useState } from 'react'
 import { IssuerDashboard } from './components/IssuerDashboard'
 import { PayScreen } from './components/PayScreen'
-import { SPOOKLY_ADDRESS_TESTNET, ARC_TESTNET_CHAIN_ID } from './lib/contract'
+import { SPOOKLY_ADDRESS, ARC_TESTNET_CHAIN_ID } from './lib/contract'
 
 type Route = { type: 'dashboard' } | { type: 'pay'; fragment: string }
 
@@ -37,7 +37,7 @@ export default function App() {
     return (
       <PayScreen
         fragment={route.fragment}
-        contractAddress={SPOOKLY_ADDRESS_TESTNET}
+        contractAddress={SPOOKLY_ADDRESS}
         chainId={ARC_TESTNET_CHAIN_ID}
       />
     )

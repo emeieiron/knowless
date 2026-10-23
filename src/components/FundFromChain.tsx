@@ -1,12 +1,12 @@
 /**
- * FundFromChain — fund an Arc Testnet knowless link from Ethereum Sepolia or Base Sepolia
+ * FundFromChain — fund an Arc knowless link from Ethereum or Base
  * via CCTP V2 depositForBurnWithHook.
  *
  * Flow:
  *   1. User selects source chain and enters USDC amount.
  *   2. Component fetches fee quote and shows gross/fee/min-received/gas note.
  *   3. User approves USDC spend (if needed), then burns via TokenMessengerV2.
- *   4. Component polls Circle Messages API and Arc Testnet for destination confirmation.
+ *   4. Component polls Circle Messages API and Arc for destination confirmation.
  *   5. On confirmed destination mint, user proceeds to create the link.
  *
  * Security:
@@ -34,35 +34,35 @@ import {
 
 // ── Static chain/token config ───────────────────────────────────────────────
 
-const ARC_TESTNET_CHAIN_ID     = 5042002
-const ARC_TESTNET_USDC: Address = '0x3600000000000000000000000000000000000000' // arc-studio-allow-onchain-literal
-const ARC_TESTNET_DOMAIN       = 26
+const ARC_CHAIN_ID     = 5042
+const ARC_USDC: Address = '0x3600000000000000000000000000000000000000' // arc-studio-allow-onchain-literal
+const ARC_DOMAIN       = 26
 
 const CCTP_FORWARDING_HOOK =
   '0x636374702d666f72776172640000000000000000000000000000000000000000' as Hex
 
-const MESSAGES_API = 'https://iris-api-sandbox.circle.com'
+const MESSAGES_API = 'https://iris-api.circle.com'
 
 export const SOURCE_CHAINS = [
   {
-    chainId:      11155111,
-    label:        'Ethereum Sepolia',
-    shortLabel:   'Eth Sepolia',
+    chainId:      1,
+    label:        'Ethereum',
+    shortLabel:   'Ethereum',
     domain:       0,
-    usdc:         '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238' as Address, // arc-studio-allow-onchain-literal
-    messenger:    '0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA' as Address, // arc-studio-allow-onchain-literal
-    explorerBase: 'https://sepolia.etherscan.io',
-    rpcUrl:       'https://ethereum-sepolia-rpc.publicnode.com',
+    usdc:         '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48' as Address,
+    messenger:    '0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d' as Address,
+    explorerBase: 'https://etherscan.io',
+    rpcUrl:       'https://eth.llamarpc.com',
   },
   {
-    chainId:      84532,
-    label:        'Base Sepolia',
-    shortLabel:   'Base Sep',
+    chainId:      8453,
+    label:        'Base',
+    shortLabel:   'Base',
     domain:       6,
-    usdc:         '0x036CbD53842c5426634e7929541eC2318f3dCF7e' as Address, // arc-studio-allow-onchain-literal
-    messenger:    '0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA' as Address, // arc-studio-allow-onchain-literal
-    explorerBase: 'https://sepolia.basescan.org',
-    rpcUrl:       'https://sepolia.base.org',
+    usdc:         '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' as Address,
+    messenger:    '0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d' as Address,
+    explorerBase: 'https://basescan.org',
+    rpcUrl:       'https://mainnet.base.org',
   },
 ] as const
 
@@ -200,7 +200,7 @@ export function FundFromChain({ onFunded, onBack }: FundFromChainProps) {
     setIrisLoading(true)
     try {
       const res = await fetch(
-        `${MESSAGES_API}/v2/burn/USDC/fees/${srcChain.domain}/${ARC_TESTNET_DOMAIN}?forward=true`,
+        `${MESSAGES_API}/v2/burn/USDC/fees/${srcChain.domain}/${ARC_DOMAIN}?forward=true`,
         { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) },
       )
       if (!res.ok) throw new Error(`Fee API returned ${res.status}`)
@@ -261,7 +261,7 @@ export function FundFromChain({ onFunded, onBack }: FundFromChainProps) {
       const ethOk = await hasSourceEth(provider as EIP1193Provider, account)
       if (!ethOk) {
         setState({ phase: 'failed', error:
-          `No ${sc.label} test ETH for gas. Get test ETH from a Sepolia faucet, then retry.` })
+          `No ${sc.label} ETH for gas. Add ETH to your ${sc.label} wallet to pay transaction fees, then retry.` })
         return
       }
 
@@ -346,9 +346,10 @@ export function FundFromChain({ onFunded, onBack }: FundFromChainProps) {
         }
 
         // Poll for confirmed approval receipt (max 90s, 3s interval)
+        // Skip if allowance already sufficient
         const deadline = Date.now() + 90_000
-        let approvedOk = false
-        while (Date.now() < deadline) {
+        let approvedOk = approvalSufficient
+        while (!approvedOk && Date.now() < deadline) {
           await new Promise(r => setTimeout(r, 3000))
           try {
             const rcpt = await publicClient.getTransactionReceipt({ hash: approveTxHash! })
@@ -387,7 +388,7 @@ export function FundFromChain({ onFunded, onBack }: FundFromChainProps) {
           address: sc.messenger, abi: TOKEN_MESSENGER_V2_ABI,
           functionName: 'depositForBurnWithHook',
           args: [
-            grossAmount, ARC_TESTNET_DOMAIN, mintRecipient32, sc.usdc,
+            grossAmount, ARC_DOMAIN, mintRecipient32, sc.usdc,
             ('0x' + '00'.repeat(32)) as Hex,  // destinationCaller = zero (permissionless)
             maxFee, 2000, CCTP_FORWARDING_HOOK,
           ],
@@ -442,7 +443,7 @@ export function FundFromChain({ onFunded, onBack }: FundFromChainProps) {
     }
   }, [state, address, chainIdx, switchChainAsync, config])
 
-  // ── Mint monitoring (poll Circle Messages API + Arc Testnet) ─────────────
+  // ── Mint monitoring (poll Circle Messages API + Arc) ─────────────
 
   useEffect(() => {
     if (state.phase !== 'monitoring') {
@@ -482,7 +483,7 @@ export function FundFromChain({ onFunded, onBack }: FundFromChainProps) {
         const msg = msgs.find(m => {
           const dec = m.decodedMessage as Record<string, unknown> | undefined
           return Number(m.cctpVersion ?? dec?.cctpVersion ?? 0) === 2 &&
-                 Number(dec?.destinationDomain) === ARC_TESTNET_DOMAIN
+                 Number(dec?.destinationDomain) === ARC_DOMAIN
         })
         if (!msg) { if (active) pollRef.current = setTimeout(poll, delay); return }
 
@@ -492,9 +493,9 @@ export function FundFromChain({ onFunded, onBack }: FundFromChainProps) {
           ? msg.forwardTxHash as string : null
         if (!fwdHash) { if (active) pollRef.current = setTimeout(poll, delay); return }
 
-        // Fetch Arc Testnet receipt and find USDC Transfer to recipient
+        // Fetch Arc receipt and find USDC Transfer to recipient
         try {
-          const rpc = 'https://rpc.testnet.arc.io' // arc-studio-allow-onchain-literal
+          const rpc = 'https://rpc.mainnet.arc.io' // arc-studio-allow-onchain-literal
           const rcpRes = await fetch(rpc, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getTransactionReceipt', params: [fwdHash] }),
@@ -508,7 +509,7 @@ export function FundFromChain({ onFunded, onBack }: FundFromChainProps) {
           const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
           const logs = (rcpt.logs as Array<{ address: string; topics: string[]; data: string }> | undefined) ?? []
           const transferLog = logs.find(l =>
-            l.address.toLowerCase() === ARC_TESTNET_USDC.toLowerCase() &&
+            l.address.toLowerCase() === ARC_USDC.toLowerCase() &&
             (l.topics[0] ?? '').toLowerCase() === TRANSFER_TOPIC &&
             ('0x' + (l.topics[2] ?? '').slice(-40)).toLowerCase() === destAddress.toLowerCase()
           )
@@ -549,9 +550,9 @@ export function FundFromChain({ onFunded, onBack }: FundFromChainProps) {
           <p className="font-semibold text-lg" style={{ color: 'var(--ink)' }}>
             {formatUnits(state.netAmount, 6)} USDC received
           </p>
-          <p className="text-sm" style={{ color: 'var(--muted)' }}>Bridged to your Arc Testnet wallet</p>
+          <p className="text-sm" style={{ color: 'var(--muted)' }}>Bridged to your Arc wallet</p>
           {state.destTxHash && (
-            <a href={`https://explorer.testnet.arc.io/tx/${state.destTxHash}`}
+            <a href={`https://explorer.arc.io/tx/${state.destTxHash}`}
               target="_blank" rel="noopener noreferrer"
               className="text-xs block" style={{ color: 'var(--accent)' }}>
               View on Arc Explorer ↗
@@ -611,7 +612,7 @@ export function FundFromChain({ onFunded, onBack }: FundFromChainProps) {
           <Loader2 size={32} className="animate-spin mx-auto" style={{ color: 'var(--accent)' }} />
           <div>
             <p className="font-semibold" style={{ color: 'var(--ink)' }}>Bridging in progress</p>
-            <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>Circle is minting USDC on Arc Testnet. This typically takes 1–3 minutes.</p>
+            <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>Circle is minting USDC on Arc. This typically takes 1–3 minutes.</p>
           </div>
           <div className="text-xs space-y-1 text-left">
             <p style={{ color: 'var(--subtle)' }}>
@@ -621,7 +622,7 @@ export function FundFromChain({ onFunded, onBack }: FundFromChainProps) {
                 {state.sourceTxHash.slice(0, 12)}…
               </a>
             </p>
-            <p style={{ color: 'var(--subtle)' }}>Destination: Arc Testnet ({state.destAddress.slice(0, 8)}…)</p>
+            <p style={{ color: 'var(--subtle)' }}>Destination: Arc ({state.destAddress.slice(0, 8)}…)</p>
           </div>
           <p className="text-xs" style={{ color: 'var(--subtle)' }}>You can close and return — the transfer will complete in the background.</p>
         </div>
@@ -650,13 +651,13 @@ export function FundFromChain({ onFunded, onBack }: FundFromChainProps) {
         <div className="rounded-2xl p-4 space-y-1 divide-y"
           style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
           {infoRow('Source', sc.label)}
-          {infoRow('Destination', 'Arc Testnet (your wallet)')}
+          {infoRow('Destination', 'Arc (your wallet)')}
           {infoRow('You send', `${formatUnits(grossAmount, 6)} USDC`)}
           {infoRow('Max bridge fee', `${formatUnits(maxFee, 6)} USDC`)}
           {infoRow('Min you receive', `${formatUnits(minReceived, 6)} USDC`)}
         </div>
         <div className="rounded-xl px-4 py-3 text-xs" style={{ background: 'var(--surface-muted)', color: 'var(--muted)' }}>
-          Source {sc.label} ETH is required for gas. After bridging, USDC arrives directly in your Arc Testnet wallet.
+          Source {sc.label} ETH is required for gas. After bridging, USDC arrives directly in your Arc wallet.
         </div>
         <button type="button" onClick={() => void handleBurn()}
           className="w-full rounded-2xl py-4 font-semibold"
@@ -676,7 +677,7 @@ export function FundFromChain({ onFunded, onBack }: FundFromChainProps) {
     <div className="space-y-5">
       <div>
         <h2 className="text-base font-semibold mb-1" style={{ color: 'var(--ink)' }}>Fund from another chain</h2>
-        <p className="text-sm" style={{ color: 'var(--muted)' }}>Bridge USDC via Circle CCTP V2 to your Arc Testnet wallet.</p>
+        <p className="text-sm" style={{ color: 'var(--muted)' }}>Bridge USDC via Circle CCTP V2 to your Arc wallet.</p>
       </div>
       <div>
         <label className="text-xs font-medium block mb-2" style={{ color: 'var(--muted)' }}>Source chain</label>
@@ -699,7 +700,7 @@ export function FundFromChain({ onFunded, onBack }: FundFromChainProps) {
       <div className="flex items-center gap-3 text-xs" style={{ color: 'var(--muted)' }}>
         <span className="rounded-lg px-2 py-1" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>{srcChain.shortLabel}</span>
         <ArrowDown size={14} />
-        <span className="rounded-lg px-2 py-1" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>Arc Testnet</span>
+        <span className="rounded-lg px-2 py-1" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>Arc</span>
       </div>
       <div>
         <div className="flex justify-between items-center mb-2">

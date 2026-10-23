@@ -6,8 +6,8 @@
  *
  * Key invariants
  * ──────────────
- * • DEST_CHAIN_CONFIGS: MessageTransmitterV2 = 0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275
- *   on both Ethereum Sepolia (domain 0) and Base Sepolia (domain 6) — official Circle V2.
+ * • DEST_CHAIN_CONFIGS: MessageTransmitterV2 = 0x81D40F21F12A8F0E3252Bccb954D722d4c464B64
+ *   on both Ethereum Mainnet (domain 0) and Base Mainnet (domain 6) — official Circle V2.
  * • MESSAGE_RECEIVED_TOPIC: exact V2 signature with uint32 finalityThresholdExecuted
  *   and bytes messageBody (NOT the V1 uint64 nonce signature).
  * • fetchIrisFee: real Iris API returns a top-level JSON array, not {fees:[...]}.
@@ -547,7 +547,7 @@ export const CCTP_SCHEMA_SQL = `
 
 // ── Iris fee API ──────────────────────────────────────────────────────────────
 
-const IRIS_BASE_DEFAULT = 'https://iris-api-sandbox.circle.com'
+const IRIS_BASE_DEFAULT = 'https://iris-api.circle.com'
 export const ARC_SOURCE_DOMAIN = 26
 
 export interface IrisFeeResult {
@@ -642,7 +642,7 @@ export async function fetchIrisFee(
 
 // ── Circle Messages API ───────────────────────────────────────────────────────
 
-const MESSAGES_BASE_DEFAULT = 'https://iris-api-sandbox.circle.com'
+const MESSAGES_BASE_DEFAULT = 'https://iris-api.circle.com'
 
 export interface CctpMessageStatus {
   cctpVersion:      number   // must be 2 for CCTP V2
@@ -794,23 +794,23 @@ export interface DestChainConfig {
 }
 
 /**
- * Official Circle CCTP V2 testnet configs.
- * MessageTransmitterV2: 0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275 (both Eth Sepolia + Base Sepolia).
+ * Official Circle CCTP V2 mainnet configs.
+ * MessageTransmitterV2: 0x81D40F21F12A8F0E3252Bccb954D722d4c464B64 (both Ethereum + Base Mainnet).
  */
 export const DEST_CHAIN_CONFIGS: Record<number, DestChainConfig> = {
-  // ETH_SEPOLIA_DOMAIN = 0
+  // Ethereum Mainnet (domain 0)
   0: {
-    chainId:         11155111,
-    rpcUrl:          'https://ethereum-sepolia-rpc.publicnode.com', // arc-studio-allow-onchain-literal
-    transmitterAddr: '0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275', // arc-studio-allow-onchain-literal
-    usdcAddr:        '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', // arc-studio-allow-onchain-literal
+    chainId:         1,
+    rpcUrl:          'https://eth.llamarpc.com',
+    transmitterAddr: '0x81D40F21F12A8F0E3252Bccb954D722d4c464B64',
+    usdcAddr:        '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
   },
-  // BASE_SEPOLIA_DOMAIN = 6
+  // Base Mainnet (domain 6)
   6: {
-    chainId:         84532,
-    rpcUrl:          'https://base-sepolia-rpc.publicnode.com', // arc-studio-allow-onchain-literal
-    transmitterAddr: '0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275', // arc-studio-allow-onchain-literal
-    usdcAddr:        '0x036CbD53842c5426634e7929541eC2318f3dCF7e', // arc-studio-allow-onchain-literal
+    chainId:         8453,
+    rpcUrl:          'https://mainnet.base.org',
+    transmitterAddr: '0x81D40F21F12A8F0E3252Bccb954D722d4c464B64',
+    usdcAddr:        '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
   },
 }
 

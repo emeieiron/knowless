@@ -33,7 +33,7 @@ import { saveLink, updateLinkTxHash } from '../lib/storage'
 import { parseUsdcInput, formatUsdcFixed } from '../lib/format'
 import { classifyWriteError } from '../lib/writeError'
 
-const ARC_EXPLORER = 'https://explorer.testnet.arc.io' // arc-studio-allow-onchain-literal
+const ARC_EXPLORER = 'https://explorer.arc.io' // arc-studio-allow-onchain-literal
 function buildTxExplorerUrl(_chainId: number, txHash: string): string {
   return `${ARC_EXPLORER}/tx/${txHash}`
 }
@@ -334,7 +334,7 @@ export function CreateLinkForm({ contractAddress, onLinkCreated }: CreateLinkFor
         <button type="button" onClick={() => switchChain({ chainId: ARC_TESTNET_CHAIN_ID })}
           className="w-full rounded-xl py-3.5 font-semibold text-sm"
           style={{ background: 'var(--danger)', color: '#fff', minHeight: '48px' }}>
-          Switch to Arc Testnet
+          Switch to Arc
         </button>
       )}
 

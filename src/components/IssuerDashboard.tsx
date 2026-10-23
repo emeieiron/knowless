@@ -18,7 +18,7 @@ import { LinkCard } from './LinkCard'
 import { FundFromChain } from './FundFromChain'
 import { loadLinks } from '../lib/storage'
 import type { StoredLink } from '../lib/storage'
-import { SPOOKLY_ADDRESS_TESTNET, ARC_TESTNET_CHAIN_ID } from '../lib/contract'
+import { SPOOKLY_ADDRESS, ARC_TESTNET_CHAIN_ID } from '../lib/contract'
 import { formatUsdcFixed, parseUsdcInput } from '../lib/format'
 
 type View = 'dashboard' | 'create' | 'fund' | 'share'
@@ -32,7 +32,7 @@ interface SharedLink {
 
 export function IssuerDashboard() {
   const { address, isConnected } = useAccount()
-  const contractAddress = SPOOKLY_ADDRESS_TESTNET
+  const contractAddress = SPOOKLY_ADDRESS
 
   const [view, setView] = useState<View>('dashboard')
   // refreshTick bumps to force a re-read of localStorage after mutations
@@ -194,7 +194,7 @@ export function IssuerDashboard() {
 
         <div className="rounded-xl px-4 py-3 text-xs space-y-1"
           style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
-          <p className="font-semibold" style={{ color: 'var(--ink-2)' }}>Arc Testnet</p>
+          <p className="font-semibold" style={{ color: 'var(--ink-2)' }}>Arc</p>
           <p className="mono" style={{ color: 'var(--subtle)' }}>
             Contract: {contractAddress.slice(0, 10)}…{contractAddress.slice(-6)}
           </p>

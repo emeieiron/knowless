@@ -1,0 +1,74 @@
+{
+  "generatedAt": "2026-10-23",
+  "release": "knowless-mainnet-v1",
+  "status": "ready-for-deployment",
+  "contracts": {
+    "escrow": {
+      "name": "Spookly",
+      "address": "0xd93F67D2735e3Af22E699D65AeAa6147Db2c9214",
+      "txHash": "0xa3eafb8b265cd6c10a0d923d4ccceb93f9119a4fa4e46fef13211c0ed22729b0",
+      "chain": 5042,
+      "explorer": "https://explorer.arc.io/tx/0xa3eafb8b265cd6c10a0d923d4ccceb93f9119a4fa4e46fef13211c0ed22729b0"
+    },
+    "router": {
+      "name": "KnowlessCctpRouter",
+      "address": "0x86Eb182052582D814C37A127a712353087BA759A",
+      "txHash": "0x6a4df3dbd704a9eaa99b924c33feafd48d948c3f2941208461aa206ea43ee42e",
+      "chain": 5042,
+      "explorer": "https://explorer.arc.io/tx/0x6a4df3dbd704a9eaa99b924c33feafd48d948c3f2941208461aa206ea43ee42e"
+    }
+  },
+  "build": {
+    "typecheck": {
+      "errors": 0
+    },
+    "viteBuild": {
+      "exitCode": 0,
+      "tool": "vite 6.4.4"
+    },
+    "workerBundle": {
+      "exitCode": 0,
+      "sizeKiB": 354.12,
+      "gzipKiB": 76.93,
+      "dryRun": true
+    }
+  },
+  "networks": {
+    "arc": {
+      "chainId": 5042,
+      "rpc": "https://rpc.mainnet.arc.io",
+      "explorer": "https://explorer.arc.io"
+    },
+    "ethereum": {
+      "chainId": 1,
+      "domain": 0,
+      "usdc": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    },
+    "base": {
+      "chainId": 8453,
+      "domain": 6,
+      "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    },
+    "cctpMessenger": "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d",
+    "cctpTransmitter": "0x81D40F21F12A8F0E3252Bccb954D722d4c464B64"
+  },
+  "changedFiles": [
+    "src/App.tsx",
+    "src/lib/contract.ts",
+    "src/lib/cctp.ts",
+    "src/components/IssuerDashboard.tsx",
+    "src/components/PayScreen.tsx",
+    "src/components/FundFromChain.tsx",
+    "worker/cctp-relay-do.ts",
+    "wrangler.toml",
+    "publication/worker/wrangler-publish.toml"
+  ],
+  "notes": [
+    "No tests rerun: Solidity contracts unchanged/already-deployed; Worker smoke not rerun (no relay integration changes).",
+    "Typecheck 0 errors. Worker dry-run bundle confirmed mainnet chain/contract addresses.",
+    "Worker RelayDO class binding unchanged: new_sqlite_classes=['RelayDO'], v1 migration preserved.",
+    "FundFromChain approvalSufficient polling bug fixed: approvedOk initialised to approvalSufficient.",
+    "Production Iris API: https://iris-api.circle.com (not sandbox).",
+    "Unit/mock coverage. No live mainnet transaction submitted by Arc Studio."
+  ]
+}

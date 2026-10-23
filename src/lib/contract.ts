@@ -5,11 +5,13 @@
 
 import type { Address } from 'viem'
 
-// ARC TESTNET deployment — updated after deploy
-// v2 deployment — includes feeRecipient+quoteExpiry in PaymentAuth
-export const SPOOKLY_ADDRESS_TESTNET: Address = '0xbe223821c0925e87cde1ca397fdce253a8ce7b22'
-export const ARC_TESTNET_CHAIN_ID = 5042002
-export const ARC_TESTNET_USDC: Address = '0x3600000000000000000000000000000000000000'
+// ARC MAINNET deployment (chain 5042)
+export const SPOOKLY_ADDRESS: Address           = '0xd93F67D2735e3Af22E699D65AeAa6147Db2c9214'
+export const CCTP_ROUTER_ADDRESS: Address       = '0x86Eb182052582D814C37A127a712353087BA759A'
+export const ARC_TESTNET_CHAIN_ID               = 5042   // Arc chain ID (same for mainnet)
+// alias kept for backward compat in callers that still use the testnet name
+export const SPOOKLY_ADDRESS_TESTNET: Address   = SPOOKLY_ADDRESS
+export const ARC_TESTNET_USDC: Address          = '0x3600000000000000000000000000000000000000'
 
 export const SPOOKLY_ABI = [
   {

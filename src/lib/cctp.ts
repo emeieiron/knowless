@@ -5,8 +5,8 @@
  * No deployed address is stored here — addresses must come from
  * environment variables or deployment manifests at runtime.
  *
- * Chain facts (Arc Testnet):
- *   Chain ID          : 5042002
+ * Chain facts (Arc):
+ *   Chain ID          : 5042
  *   USDC (ERC-20/gas) : 0x3600000000000000000000000000000000000000
  *   Arc CCTP domain   : 26
  *   Destination domains: EthereumSepolia=0, BaseSepolia=6
@@ -24,7 +24,9 @@ import type { Address, Hex } from 'viem'
 
 // ── Chain / domain constants ─────────────────────────────────────────────────
 
-export const ARC_TESTNET_CHAIN_ID  = 5042002n
+export const ARC_CHAIN_ID          = 5042n
+/** @deprecated use ARC_CHAIN_ID */
+export const ARC_TESTNET_CHAIN_ID  = ARC_CHAIN_ID
 export const ARC_CCTP_DOMAIN       = 26
 export const ETH_SEPOLIA_DOMAIN    = 0
 export const BASE_SEPOLIA_DOMAIN   = 6
@@ -43,8 +45,8 @@ export const SUPPORTED_DESTINATION_DOMAINS: ReadonlyArray<number> = [
 ] as const
 
 export const DESTINATION_DOMAIN_LABELS: Record<number, string> = {
-  [ETH_SEPOLIA_DOMAIN]:  'Ethereum Sepolia',
-  [BASE_SEPOLIA_DOMAIN]: 'Base Sepolia',
+  [ETH_SEPOLIA_DOMAIN]:  'Ethereum',
+  [BASE_SEPOLIA_DOMAIN]: 'Base',
 }
 
 // ── KnowlessCctpRouter ABI (minimal — routePayment + events + errors + views) ─

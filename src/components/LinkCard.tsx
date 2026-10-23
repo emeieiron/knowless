@@ -25,7 +25,7 @@ import { formatUsdcFixed, formatExpiry, truncateAddress } from '../lib/format'
 import type { StoredLink } from '../lib/storage'
 import { classifyWriteError } from '../lib/writeError'
 
-const ARC_EXPLORER = 'https://explorer.testnet.arc.io' // arc-studio-allow-onchain-literal
+const ARC_EXPLORER = 'https://explorer.arc.io' // arc-studio-allow-onchain-literal
 function buildTxExplorerUrl(_chainId: number, txHash: string): string {
   return `${ARC_EXPLORER}/tx/${txHash}`
 }

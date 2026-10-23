@@ -25,16 +25,17 @@ new_sqlite_classes = ["RelayDO"]
 # NEVER put the private key here or in source control.
 
 [vars]
-RELAY_CHAIN_ID = "5042002"
-RELAY_CONTRACT_ADDRESS = "0xbe223821c0925e87cde1ca397fdce253a8ce7b22"
+RELAY_CHAIN_ID = "5042"
+RELAY_CONTRACT_ADDRESS = "0xd93F67D2735e3Af22E699D65AeAa6147Db2c9214"
 RELAY_MAX_FEE_USDC = "200000"
 RELAY_FEE_MARGIN_USDC = "50000"
 RELAY_QUOTE_TTL_S = "300"
+RELAY_CCTP_ROUTER_ADDRESS = "0x86Eb182052582D814C37A127a712353087BA759A"
 # Set ALLOWED_ORIGIN to your Vercel deployment URL, e.g.:
-# ALLOWED_ORIGIN = "https://knowless.vercel.app"
+# ALLOWED_ORIGIN = "https://knowless-pi.vercel.app"
 # For local dev with wrangler dev:
 # ALLOWED_ORIGIN = "http://localhost:5173"
-ALLOWED_ORIGIN = "https://knowless.vercel.app"
+ALLOWED_ORIGIN = "https://knowless-pi.vercel.app"
 
 # ── Local dev overrides ────────────────────────────────────────────────────────
 [env.dev]

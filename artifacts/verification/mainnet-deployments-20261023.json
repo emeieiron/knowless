@@ -1,0 +1,62 @@
+{
+  "verifiedAt": "2026-10-23T01:34:43.681Z",
+  "chainId": 5042,
+  "deployer": "0x4831d80d52eE80d513b87E06da7cf17ad5c45f95",
+  "transactionsSubmitted": 0,
+  "contracts": [
+    {
+      "name": "Spookly",
+      "address": "0xd93F67D2735e3Af22E699D65AeAa6147Db2c9214",
+      "transactionHash": "0xa3eafb8b265cd6c10a0d923d4ccceb93f9119a4fa4e46fef13211c0ed22729b0",
+      "blockNumber": 27375706,
+      "nonce": 0,
+      "receiptStatus": "success",
+      "canonical": true,
+      "compiledCreationAndConstructorMatch": true,
+      "creationInputSha256": "05b8c58ea09e6965061822224442ed25dd202c26bba81400c68a6e85b6057781",
+      "runtimeBytes": 3571,
+      "runtimeSha256": "80e4acb158a04aadd1e1739c40ab7896556b2c23df6011a26b0a55f663321fee",
+      "constructorArguments": [
+        "0x3600000000000000000000000000000000000000"
+      ],
+      "reads": {
+        "usdc()": "0x3600000000000000000000000000000000000000"
+      },
+      "explorer": "https://explorer.arc.io/tx/0xa3eafb8b265cd6c10a0d923d4ccceb93f9119a4fa4e46fef13211c0ed22729b0"
+    },
+    {
+      "name": "KnowlessCctpRouter",
+      "address": "0x86Eb182052582D814C37A127a712353087BA759A",
+      "transactionHash": "0x6a4df3dbd704a9eaa99b924c33feafd48d948c3f2941208461aa206ea43ee42e",
+      "blockNumber": 27375861,
+      "nonce": 1,
+      "receiptStatus": "success",
+      "canonical": true,
+      "compiledCreationAndConstructorMatch": true,
+      "creationInputSha256": "4dc6ab75861a5e155dd1fdf104f4af8d845a34b22d7ee46078eef22afa36241f",
+      "runtimeBytes": 3191,
+      "runtimeSha256": "6bfc5b9910cb77fd55062e5ad2f6501e34a8badfecd0f94a5972ba2195705792",
+      "constructorArguments": [
+        "0xd93F67D2735e3Af22E699D65AeAa6147Db2c9214",
+        "0x3600000000000000000000000000000000000000",
+        "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d"
+      ],
+      "reads": {
+        "escrow()": "0xd93f67d2735e3af22e699d65aeaa6147db2c9214",
+        "usdc()": "0x3600000000000000000000000000000000000000",
+        "tokenMessenger()": "0x28b5a0e9c621a5badaa536219b3a228c8168cf5d",
+        "ARC_MAINNET_CHAIN_ID()": 5042,
+        "ARC_CCTP_DOMAIN()": 26,
+        "ETHEREUM_DOMAIN()": 0,
+        "BASE_DOMAIN()": 6,
+        "FINALITY_THRESHOLD()": 2000
+      },
+      "explorer": "https://explorer.arc.io/tx/0x6a4df3dbd704a9eaa99b924c33feafd48d948c3f2941208461aa206ea43ee42e"
+    }
+  ],
+  "account": {
+    "nativeUsdcWei": "3313288840769568937",
+    "latestNonce": 2,
+    "pendingNonce": 2
+  }
+}

@@ -122,7 +122,7 @@ export default {
 
     // Route to single DO keyed by chain + relay ACCOUNT ADDRESS.
     // Contract identity is validated inside the DO (config_fingerprint).
-    const chainId = parseInt(env.RELAY_CHAIN_ID ?? '5042002', 10)
+    const chainId = parseInt(env.RELAY_CHAIN_ID ?? '5042', 10)
     const doKey   = deriveDoKey(chainId, relayAddress)
     const doId    = env.RELAY_DO.idFromName(doKey)
     const doStub  = env.RELAY_DO.get(doId)

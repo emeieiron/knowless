@@ -31,7 +31,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useReadContract } from 'wagmi'
 import type { Address, Hex } from 'viem'
-import { SPOOKLY_ABI, ARC_TESTNET_CHAIN_ID } from '../lib/contract'
+import { SPOOKLY_ABI, ARC_TESTNET_CHAIN_ID, CCTP_ROUTER_ADDRESS } from '../lib/contract'
 import {
   decodeLinkFragment,
   deriveSignerAddress,
@@ -60,7 +60,7 @@ import {
 } from '../lib/cctp'
 type PayScreenMode = 'scan' | 'review'
 
-const ARC_EXPLORER = 'https://explorer.testnet.arc.io' // arc-studio-allow-onchain-literal
+const ARC_EXPLORER = 'https://explorer.arc.io' // arc-studio-allow-onchain-literal
 function buildTxExplorerUrl(_chainId: number, txHash: string): string {
   return `${ARC_EXPLORER}/tx/${txHash}`
 }
@@ -74,8 +74,8 @@ interface PayScreenProps {
 // Module-level: no impure calls in render
 function epochSeconds(): number { return Math.floor(Date.now() / 1000) }
 
-// Arc Testnet public RPC used only for receipt polling
-const ARC_RPC = 'https://rpc.testnet.arc.io' // arc-studio-allow-onchain-literal
+// Arc public RPC used only for receipt polling
+const ARC_RPC = 'https://rpc.mainnet.arc.io' // arc-studio-allow-onchain-literal
 
 // Decode fragment once — pure, sync, called outside the React tree
 function decodeFragment(fragment: string, chainId: number, contractAddress: Address): {
@@ -119,7 +119,7 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
 
-  // Destination network selector: null = Arc (direct), 0 = Eth Sepolia, 6 = Base Sepolia
+  // Destination network selector: null = Arc (direct), 0 = Ethereum, 6 = Base
   const [destDomain, setDestDomain] = useState<number | null>(null)
 
   // CCTP quote state
@@ -627,10 +627,10 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
     const isMintConfirmed = cctpIntent.status === 'mint_confirmed'
     const isSourceConfirmed = cctpIntent.status === 'source_confirmed' || cctpIntent.status === 'mint_pending' || isMintConfirmed
     const destLabel = DESTINATION_DOMAIN_LABELS[cctpIntent.destinationDomain] ?? `Domain ${cctpIntent.destinationDomain}`
-    const ARC_EXPLORER_BASE = 'https://explorer.testnet.arc.io' // arc-studio-allow-onchain-literal
-    const ETH_SEP_EXPLORER  = 'https://sepolia.etherscan.io'    // arc-studio-allow-onchain-literal
-    const BASE_SEP_EXPLORER = 'https://sepolia.basescan.org'    // arc-studio-allow-onchain-literal
-    const destExplorer = cctpIntent.destinationDomain === 0 ? ETH_SEP_EXPLORER : BASE_SEP_EXPLORER
+    const ARC_EXPLORER_BASE = 'https://explorer.arc.io' // arc-studio-allow-onchain-literal
+    const ETH_EXPLORER  = 'https://etherscan.io'    // arc-studio-allow-onchain-literal
+    const BASE_EXPLORER = 'https://basescan.org'    // arc-studio-allow-onchain-literal
+    const destExplorer = cctpIntent.destinationDomain === 0 ? ETH_EXPLORER : BASE_EXPLORER
 
     if (isMintConfirmed) {
       return (
@@ -821,7 +821,7 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
           style={{ borderColor: 'var(--accent)', borderTopColor: 'transparent' }} aria-label="Pending" />
         <p className="font-semibold text-lg display" style={{ color: 'var(--ink)' }}>Confirming…</p>
         <p className="text-sm max-w-xs" style={{ color: 'var(--muted)' }}>
-          Your payment is pending on Arc Testnet. Do not close this tab.
+          Your payment is pending on Arc. Do not close this tab.
         </p>
         <a href={buildTxExplorerUrl(ARC_TESTNET_CHAIN_ID, intent.txHash)}
           target="_blank" rel="noopener noreferrer"
@@ -999,7 +999,7 @@ export function PayScreen({ fragment, contractAddress, chainId }: PayScreenProps
                   border:     `1px solid ${destDomain === d ? 'var(--accent)' : 'var(--border)'}`,
                   minHeight: '40px',
                 }}>
-                {d === null ? 'Arc Testnet' : (DESTINATION_DOMAIN_LABELS[d] ?? `Domain ${d}`)}
+                {d === null ? 'Arc' : (DESTINATION_DOMAIN_LABELS[d] ?? `Domain ${d}`)}
               </button>
             ))}
           </div>

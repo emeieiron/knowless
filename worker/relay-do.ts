@@ -104,7 +104,7 @@ import {
 
 export interface RelayDOEnv {
   RELAY_PRIVATE_KEY: string      // Wrangler secret
-  RELAY_CHAIN_ID?: string        // default '5042002'
+  RELAY_CHAIN_ID?: string        // default '5042'
   RELAY_CONTRACT_ADDRESS: string
   RELAY_HMAC_SECRET?: string     // optional override; derived from key if absent
   RELAY_MAX_FEE_USDC?: string    // default '200000' (0.20 USDC, 6-dec)
@@ -199,7 +199,7 @@ export class RelayDO {
   #schemaReady  = false
   #initError: string | null = null
   #rpcUrl       = ''
-  #chainId      = 5042002
+  #chainId      = 5042
   #contractAddress = '' as Address
   #relayAddress    = '' as Address
   #maxFeeUsdc      = 200000n
@@ -260,7 +260,7 @@ export class RelayDO {
 
       const account = privateKeyToAccount(pk)
       this.#relayAddress = account.address
-      this.#chainId = parseInt(this.env.RELAY_CHAIN_ID ?? '5042002', 10)
+      this.#chainId = parseInt(this.env.RELAY_CHAIN_ID ?? '5042', 10)
       this.#contractAddress = this.env.RELAY_CONTRACT_ADDRESS as Address
       if (!this.#contractAddress || !/^0x[0-9a-fA-F]{40}$/.test(this.#contractAddress))
         throw new Error('RELAY_CONTRACT_ADDRESS not set or invalid')
@@ -269,7 +269,7 @@ export class RelayDO {
       this.#feeMarginUsdc = BigInt(this.env.RELAY_FEE_MARGIN_USDC ?? '50000')
       this.#quoteTtlS = parseInt(this.env.RELAY_QUOTE_TTL_S ?? '300', 10)
       this.#hmacSecret = this.env.RELAY_HMAC_SECRET ?? deriveHmacSecret(pk)
-      this.#rpcUrl = this.env.RELAY_RPC_URL ?? 'https://rpc.testnet.arc.io' // arc-studio-allow-onchain-literal
+      this.#rpcUrl = this.env.RELAY_RPC_URL ?? 'https://rpc.mainnet.arc.io' // arc-studio-allow-onchain-literal
       this.#irisBaseUrl = this.env.RELAY_IRIS_BASE_URL ?? ''
       this.#doIdentityKey = RelayDO.deriveDoKey(this.#chainId, this.#relayAddress)
 
@@ -1340,7 +1340,7 @@ export class RelayDO {
 
   #encodeUsedNonces(signerAddr: Address, nonce: bigint): string {
     // Deployed public mapping getter: usedNonces(address,uint256) returns (bool)
-    // Verified live: arc testnet 0xbe22... → returns bool
+    // Verified live: arc mainnet... → returns bool
     const sigBytes = new TextEncoder().encode('usedNonces(address,uint256)')
     const hash = keccak256(sigBytes as unknown as Hex)
     const selector = hash.slice(0, 10)
