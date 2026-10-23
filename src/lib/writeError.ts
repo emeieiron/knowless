@@ -87,7 +87,7 @@ function revertName(err: unknown): string | null {
   return null
 }
 
-export function classifyWriteError(err: unknown, networkName = 'Arc Testnet'): ClassifiedError {
+export function classifyWriteError(err: unknown, networkName = 'Arc Mainnet'): ClassifiedError {
   if (!err) return { category: 'generic', message: 'Unknown error.' }
 
   const chain = causes(err)

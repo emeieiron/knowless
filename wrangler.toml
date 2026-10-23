@@ -26,6 +26,7 @@ new_sqlite_classes = ["RelayDO"]
 
 [vars]
 RELAY_CHAIN_ID = "5042"
+RELAY_RPC_URL          = "https://rpc.drpc.mainnet.arc.io"
 RELAY_CONTRACT_ADDRESS = "0xd93F67D2735e3Af22E699D65AeAa6147Db2c9214"
 RELAY_MAX_FEE_USDC = "200000"
 RELAY_FEE_MARGIN_USDC = "50000"

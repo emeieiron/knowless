@@ -373,7 +373,7 @@ export function decodeBurnMessageV2Body(bodyHex: string): DecodedBurnMessageV2 |
  *  Returns { ok: true, netAmount, feeExecuted } on success.
  */
 /** Source chain (Arc Testnet) CCTP V2 TokenMessengerV2 — outer envelope sender field in MessageReceived. */
-export const ARC_TOKEN_MESSENGER_V2 = '0x8fe6b999dc680ccfdd5bf7eb0974218be2542daa'
+export const ARC_TOKEN_MESSENGER_V2 = '0x28b5a0e9c621a5badaa536219b3a228c8168cf5d' // Arc Mainnet TokenMessengerV2
 
 export function verifyDestinationReceipt(
   receipt: {
@@ -848,10 +848,9 @@ export async function validateRouterImmutables(
   }
 
   try {
-    const [escrowHex, usdcHex] = await Promise.all([
-      rpcCall('eth_call', [{ to: routerAddress, data: encodeViewCall('escrow()') }, 'latest']) as Promise<string>,
-      rpcCall('eth_call', [{ to: routerAddress, data: encodeViewCall('usdc()') }, 'latest']) as Promise<string>,
-    ])
+    // Sequential to avoid parallel burst on a rate-limited RPC
+    const escrowHex = await rpcCall('eth_call', [{ to: routerAddress, data: encodeViewCall('escrow()') }, 'latest']) as string
+    const usdcHex   = await rpcCall('eth_call', [{ to: routerAddress, data: encodeViewCall('usdc()') }, 'latest']) as string
     const readEscrow = ('0x' + escrowHex.slice(-40)).toLowerCase()
     const readUsdc   = ('0x' + usdcHex.slice(-40)).toLowerCase()
     if (readEscrow !== expectedEscrow.toLowerCase())

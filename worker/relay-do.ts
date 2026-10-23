@@ -1386,15 +1386,23 @@ export class RelayDO {
     if (this.#cctpReadinessResult === true) return null
     if (typeof this.#cctpReadinessResult === 'string') return this.#cctpReadinessResult
 
-    // First check: validate router immutables
+    // First check: validate router immutables.
+    // Cache ONLY a successful check (true). On transient RPC failure, return
+    // unavailable but leave #cctpReadinessResult unset so the next request retries.
     const err = await validateRouterImmutables(
       this.#cctpRouterAddress,
       this.#contractAddress,
       this.#usdcAddress,
       this.#rpcUrl,
     )
-    this.#cctpReadinessResult = err ?? true
-    return err ?? null
+    if (err === null) {
+      this.#cctpReadinessResult = true
+      return null
+    }
+    // Distinguish transient RPC errors from definitive mismatches
+    const isTransient = err.includes('RPC HTTP') || err.includes('RPC:')
+    if (!isTransient) this.#cctpReadinessResult = err  // cache permanent failure only
+    return err
   }
 
   // ── CCTP Quote ───────────────────────────────────────────────────────────
