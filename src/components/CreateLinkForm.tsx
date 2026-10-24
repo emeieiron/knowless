@@ -339,38 +339,44 @@ export function CreateLinkForm({ contractAddress, onLinkCreated }: CreateLinkFor
       )}
 
       {/* Approve */}
+      {!isWrongChain && needsApproval && !isCreateSuccess && canProceed && (
+        <p className="text-sm" style={{ color: 'var(--muted)' }}>Approve USDC first, then create the funded link.</p>
+      )}
       {!isWrongChain && needsApproval && !isCreateSuccess && (
         <button type="button" onClick={handleApprove}
           disabled={!canProceed || isAnyInFlight}
           className="w-full rounded-xl py-3.5 font-semibold text-sm transition-opacity disabled:opacity-50"
           style={{ background: 'var(--accent)', color: '#fff', minHeight: '48px' }}
           aria-busy={isApproveInFlight}>
-          {isApproving ? 'Confirm in wallet…' : isApproveConfirming ? 'Approving…' : 'Approve USDC'}
+          {isApproving ? '1 of 2: Confirm approval in wallet…' : isApproveConfirming ? '1 of 2: Approving USDC…' : '1 of 2: Approve USDC'}
         </button>
       )}
 
       {/* Create */}
+      {!isWrongChain && !needsApproval && !isCreateSuccess && canProceed && (
+        <p className="text-sm" style={{ color: 'var(--muted)' }}>USDC is already approved for this amount. Create the link to deposit the funds.</p>
+      )}
       {!isWrongChain && !needsApproval && !isCreateSuccess && (
         <button type="button" onClick={handleCreate}
           disabled={!canProceed || isAnyInFlight}
           className="w-full rounded-xl py-3.5 font-semibold text-sm transition-opacity disabled:opacity-50"
           style={{ background: 'var(--accent)', color: '#fff', minHeight: '48px' }}
           aria-busy={isCreateInFlight}>
-          {isCreating ? 'Confirm in wallet…'
-            : isCreateConfirming ? 'Creating link…'
-              : `Create link — ${parsedAmount !== null ? formatUsdcFixed(parsedAmount) : '0.00'} USDC`}
+          {isCreating ? '2 of 2: Confirm link in wallet…'
+            : isCreateConfirming ? '2 of 2: Creating link…'
+              : '2 of 2: Create link'}
         </button>
       )}
 
       {/* Status messages */}
       {isApproveInFlight && (
         <p role="status" aria-live="polite" className="text-xs text-center" style={{ color: 'var(--muted)' }}>
-          Approving USDC spend…
+          1 of 2: Approving USDC spend…
         </p>
       )}
       {approveHash && isApproveSuccess && (
         <p role="status" aria-live="polite" className="text-xs text-center" style={{ color: 'var(--success)' }}>
-          Approved.{' '}
+          1 of 2: USDC approved.{' '}
           <a href={buildTxExplorerUrl(ARC_TESTNET_CHAIN_ID, approveHash)}
             target="_blank" rel="noopener noreferrer" className="underline">
             View tx
@@ -381,7 +387,7 @@ export function CreateLinkForm({ contractAddress, onLinkCreated }: CreateLinkFor
         <p role="status" aria-live="polite" className="text-xs text-center" style={{ color: 'var(--muted)' }}>
           <a href={buildTxExplorerUrl(ARC_TESTNET_CHAIN_ID, createHash)}
             target="_blank" rel="noopener noreferrer" className="underline">
-            Tx submitted
+            2 of 2: Link transaction submitted
           </a>{' '}— waiting for confirmation…
         </p>
       )}

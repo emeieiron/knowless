@@ -1,0 +1,22 @@
+{
+  "date": "2026-10-24",
+  "change": "UI copy: 1 of 2 / 2 of 2 step labels in CreateLinkForm",
+  "typecheck": "0 errors",
+  "build": "exit 0, 22.63s",
+  "configSha": "d6ebacd9...MATCHES",
+  "changedFiles": [
+    "src/components/CreateLinkForm.tsx"
+  ],
+  "labels": {
+    "approveIdle": "1 of 2: Approve USDC",
+    "approvePendingWallet": "1 of 2: Confirm approval in wallet\u2026",
+    "approveConfirming": "1 of 2: Approving USDC\u2026",
+    "approveStatus": "1 of 2: Approving USDC spend\u2026",
+    "approveSuccess": "1 of 2: USDC approved.",
+    "createIdle": "2 of 2: Create link",
+    "createPendingWallet": "2 of 2: Confirm link in wallet\u2026",
+    "createConfirming": "2 of 2: Creating link\u2026",
+    "createSubmitted": "2 of 2: Link transaction submitted"
+  },
+  "scope": "copy-only; no financial/validation/state logic changed"
+}
