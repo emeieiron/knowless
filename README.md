@@ -121,3 +121,9 @@ Public configuration is in [`wrangler.toml`](wrangler.toml). Key public variable
 | `ALLOWED_ORIGIN` | `https://knowless-pi.vercel.app` |
 
 `RELAY_PRIVATE_KEY` is a Cloudflare secret and is never stored in the repository or frontend. Keep `.env*`, `server/.relay-key`, and transaction journals out of version control (covered by `.gitignore`).
+
+---
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE), except where a file or bundled dependency specifies otherwise.
