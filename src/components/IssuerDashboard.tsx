@@ -16,6 +16,7 @@ import { ConnectKitButton } from 'connectkit'
 import { Plus } from 'lucide-react'
 import type { Address } from 'viem'
 import { SpooklyGhost } from './SpooklyGhost'
+import { LandingPage } from './LandingPage'
 import { CreateLinkForm } from './CreateLinkForm'
 import { ShareLinkCard } from './ShareLinkCard'
 import { LinkCard } from './LinkCard'
@@ -84,21 +85,7 @@ export function IssuerDashboard() {
 
   // ── Disconnected landing ─────────────────────────────────────────────────
   if (!isRestoring && !isConnected) {
-    return (
-      <div className="min-h-dvh flex flex-col items-center justify-center px-4 pb-12">
-        <div className="ghost-stage flex flex-col items-center gap-6 max-w-xs w-full text-center reveal">
-          <SpooklyGhost className="w-28 h-auto" />
-          <div className="space-y-2">
-            <h1 className="text-2xl font-bold display" style={{ color: 'var(--ink)' }}>knowless</h1>
-            <p className="text-sm" style={{ color: 'var(--muted)' }}>Spendable USDC links</p>
-          </div>
-          <p className="text-sm" style={{ color: 'var(--muted)', maxWidth: '22ch', textAlign: 'center' }}>
-            Create a funded link. Share it. Anyone can spend it — no wallet needed.
-          </p>
-          <ConnectKitButton label="Connect wallet" data-slot="button" />
-        </div>
-      </div>
-    )
+    return <LandingPage onCreateLink={() => setView('create')} />
   }
 
   // ── Wallet restoring / reconnecting skeleton ─────────────────────────────

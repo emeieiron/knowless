@@ -1,0 +1,30 @@
+{
+  "generatedAt": "2026-10-24",
+  "release": "editorial-landing-20261024-r2",
+  "fixes": {
+    "1_prop_wiring": "onConnected removed; onCreateLink sets view to create then opens ConnectKit modal; nav Connect wallet uses modal only",
+    "2_mobile_header": "Two-row compact nav at <=640px: brand+Connect on row 1, How it works+GitHub on row 2; no overflow",
+    "3_mobile_cards": "min-width:0 on .landing-card; at <=640px cards stack vertically in normal flow, no absolute overlap",
+    "4_curved_ribbon": "Rectangular div replaced with real SVG curved band using cubic bezier path and gradient fill"
+  },
+  "sourceChecks": {
+    "no_onConnected": "PASS",
+    "onCreateLink_sets_create_view": "PASS",
+    "mobile_row_present": "PASS",
+    "no_art_order_minus1": "PASS",
+    "min_width_0": "PASS",
+    "svg_ribbon": "PASS",
+    "navy_qr_modules": "PASS",
+    "no_Demo_Testnet": "PASS",
+    "github_link": "PASS",
+    "how_it_works_anchor": "PASS"
+  },
+  "typecheck": {
+    "errors": 0
+  },
+  "viteBuild": {
+    "exitCode": 0,
+    "seconds": 20.5
+  },
+  "limits": "Static source checks only. No browser/wallet/camera coverage. ConnectKit modal not testable without browser context."
+}
