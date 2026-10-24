@@ -1,0 +1,13 @@
+{
+  "generated": "2026-10-24-r4",
+  "cssValidation": "7/7 postcss checks pass",
+  "noDuplicateProps": true,
+  "noNestedRules": true,
+  "cluster520px": true,
+  "h1LineHeight": ".92",
+  "lndOverflow": "visible",
+  "cluster640InMedia": true,
+  "typecheck": 0,
+  "viteBuild": "exit 0, 19.0s",
+  "limits": "PostCSS structural + static bundle checks. No browser coverage."
+}
