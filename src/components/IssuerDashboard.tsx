@@ -4,9 +4,13 @@
  * Finding 7: All links are shown regardless of local expiry — expired links must remain
  *            visible so issuers can cancel them and reclaim funds.
  *            Link state (expired/cancelled/funded/spent) is driven by chain data in LinkCard.
+ *
+ * Wallet init: wagmi status 'connecting'/'reconnecting' shows a stable loading skeleton
+ * inside the normal dashboard layout, never the disconnected landing page.
+ * Only a definitive 'disconnected' status shows the Connect screen.
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useAccount } from 'wagmi'
 import { ConnectKitButton } from 'connectkit'
 import { Plus } from 'lucide-react'
@@ -31,17 +35,34 @@ interface SharedLink {
 }
 
 export function IssuerDashboard() {
-  const { address, isConnected } = useAccount()
+  const { address, status } = useAccount()
   const contractAddress = SPOOKLY_ADDRESS
 
   const [view, setView] = useState<View>('dashboard')
-  // refreshTick bumps to force a re-read of localStorage after mutations
   const [refreshTick, setRefreshTick] = useState(0)
   const [sharedLink, setSharedLink] = useState<SharedLink | null>(null)
 
-  // Derive links synchronously from storage — no useEffect setState needed.
-  // refreshTick forces re-render (and re-read) after mutations.
-  // All stored links shown (including expired) so issuers can cancel for refunds.
+  // Initialization guard: wagmi's first render may briefly report 'disconnected'
+  // before the stored provider is re-hydrated and status transitions to 'reconnecting'
+  // or 'connected'. We show the loading skeleton until at least one useEffect has
+  // fired (i.e. the component has mounted and React's commit phase has run).
+  // This avoids the initial flash of the Connect screen on page reload.
+  const initializedRef = useRef(false)
+  const [initialized, setInitialized] = useState(false)
+  useEffect(() => {
+    if (!initializedRef.current) {
+      initializedRef.current = true
+      setInitialized(true)
+    }
+  }, [])
+
+  // Wallet connection states:
+  // 'connecting' | 'reconnecting' → hydrating/restoring — show loading skeleton
+  // 'connected'                   → fully connected
+  // 'disconnected' after init     → definitively not connected — show connect landing
+  const isRestoring = !initialized || status === 'connecting' || status === 'reconnecting'
+  const isConnected = status === 'connected'
+
   const links: StoredLink[] = address && refreshTick >= 0
     ? loadLinks(ARC_TESTNET_CHAIN_ID, contractAddress, address)
     : []
@@ -61,7 +82,8 @@ export function IssuerDashboard() {
     loadAndSetLinks()
   }, [address, contractAddress, loadAndSetLinks])
 
-  if (!isConnected) {
+  // ── Disconnected landing ─────────────────────────────────────────────────
+  if (!isRestoring && !isConnected) {
     return (
       <div className="min-h-dvh flex flex-col items-center justify-center px-4 pb-12">
         <div className="ghost-stage flex flex-col items-center gap-6 max-w-xs w-full text-center reveal">
@@ -79,6 +101,37 @@ export function IssuerDashboard() {
     )
   }
 
+  // ── Wallet restoring / reconnecting skeleton ─────────────────────────────
+  // Rendered inside the normal dashboard shell so layout is stable.
+  if (isRestoring) {
+    return (
+      <div className="min-h-dvh flex flex-col" aria-busy="true">
+        <header className="sticky top-0 z-10 px-4 py-3 flex items-center justify-between"
+          style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)', backdropFilter: 'blur(12px)' }}>
+          <div className="flex items-center gap-2">
+            <SpooklyGhost className="w-6 h-auto" />
+            <span className="font-semibold text-base display" style={{ color: 'var(--ink)' }}>knowless</span>
+          </div>
+          {/* Placeholder to keep header height identical to connected state */}
+          <div style={{ width: '120px', height: '32px', borderRadius: '8px', background: 'var(--surface-muted)' }}
+            aria-hidden="true" />
+        </header>
+        <main className="flex-1 px-4 py-6 max-w-md mx-auto w-full space-y-4"
+          role="status" aria-label="Restoring wallet…">
+          {/* Skeleton buttons */}
+          <div style={{ height: '56px', borderRadius: '16px', background: 'var(--surface-muted)' }}
+            aria-hidden="true" />
+          <div style={{ height: '44px', borderRadius: '12px', background: 'var(--surface-muted)' }}
+            aria-hidden="true" />
+          <p className="text-sm text-center" style={{ color: 'var(--subtle)' }}>
+            Restoring wallet…
+          </p>
+        </main>
+      </div>
+    )
+  }
+
+  // ── Sub-views (only reachable when connected) ────────────────────────────
   if (view === 'fund') {
     return (
       <div className="min-h-dvh flex flex-col">
@@ -142,6 +195,7 @@ export function IssuerDashboard() {
     )
   }
 
+  // ── Main dashboard ───────────────────────────────────────────────────────
   return (
     <div className="min-h-dvh flex flex-col">
       <header className="sticky top-0 z-10 px-4 py-3 flex items-center justify-between"
@@ -176,7 +230,7 @@ export function IssuerDashboard() {
             <div className="space-y-3">
               {links.map(link => (
                 <LinkCard
-                  key={link.signerAddress}
+                  key={`${address ?? ''}:${ARC_TESTNET_CHAIN_ID}:${contractAddress}:${link.signerAddress}`}
                   link={link}
                   contractAddress={contractAddress}
                   onCancelled={loadAndSetLinks}

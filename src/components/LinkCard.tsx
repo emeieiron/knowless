@@ -1,15 +1,12 @@
 /**
  * LinkCard — issuer's per-link dashboard card.
  *
- * Finding 7: Expired links remain visible and cancellable so issuers can reclaim funds.
- *            `cancelLink` works on expired-but-active links (contract allows it).
- *            Status is derived from chain data, not local expiry alone.
- *            Cancelled state is from chain (linkInfo.active === false), not just local tx.
- *
- * Finding 7: isCancelSuccess no longer mutates state during render — handled in useEffect.
+ * Status is derived from chain data via deriveLinkStatus (src/lib/linkStatus.ts).
+ * No stored principal is shown as a current balance; no status is inferred before
+ * chain data resolves. Drafts and loading states are rendered independently.
  */
 
-import { useState, useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   useWriteContract,
   useWaitForTransactionReceipt,
@@ -17,13 +14,15 @@ import {
   useAccount,
   useSwitchChain,
 } from 'wagmi'
-import { Copy, Trash2, ExternalLink, Check } from 'lucide-react'
+import { Copy, Trash2, ExternalLink, Check, RefreshCw } from 'lucide-react'
 import type { Address } from 'viem'
 import { SPOOKLY_ABI, ARC_TESTNET_CHAIN_ID } from '../lib/contract'
 import { buildLinkUrl } from '../lib/crypto'
 import { formatUsdcFixed, formatExpiry, truncateAddress } from '../lib/format'
 import type { StoredLink } from '../lib/storage'
 import { classifyWriteError } from '../lib/writeError'
+import { deriveLinkStatus } from '../lib/linkStatus'
+import type { ChainInfo } from '../lib/linkStatus'
 
 const ARC_EXPLORER = 'https://explorer.arc.io' // arc-studio-allow-onchain-literal
 function buildTxExplorerUrl(_chainId: number, txHash: string): string {
@@ -39,50 +38,94 @@ interface LinkCardProps {
 }
 
 export function LinkCard({ link, contractAddress, onCancelled }: LinkCardProps) {
-  const { chainId } = useAccount()
+  const { chainId, address: connectedAccount } = useAccount()
   const { switchChain } = useSwitchChain()
   const isWrongChain = chainId !== ARC_TESTNET_CHAIN_ID
 
   const [copied, setCopied] = useState(false)
   const [confirmCancel, setConfirmCancel] = useState(false)
 
-  const { data: linkInfo, refetch: refetchLinkInfo } = useReadContract({
+  // Scope retained data by chainId + contractAddress + signerAddress + connected account.
+  // Account changes (or explicit disconnects) reset the ref via the key prop set by parent.
+  const scopeKey = `${ARC_TESTNET_CHAIN_ID}:${contractAddress}:${link.signerAddress}:${connectedAccount ?? ''}`
+  const retainedRef = useRef<(ChainInfo & { scopeKey: string }) | null>(null)
+
+  const isDraft = !link.txHash
+
+  const {
+    data: linkInfo,
+    isLoading,
+    isFetching,
+    isError,
+    refetch: refetchLinkInfo,
+  } = useReadContract({
     address: contractAddress,
     abi: SPOOKLY_ABI,
     functionName: 'getLinkInfo',
     args: [link.signerAddress],
     chainId: ARC_TESTNET_CHAIN_ID,
+    // Don't fetch for drafts — they have no on-chain record yet
+    query: { enabled: !isDraft },
   })
 
-  const { writeContract: cancel, data: cancelHash, isPending: isCancelling, error: cancelError } = useWriteContract()
-  const { isLoading: isCancelConfirming, isSuccess: isCancelSuccess } = useWaitForTransactionReceipt({ hash: cancelHash })
+  const {
+    writeContract: cancel,
+    data: cancelHash,
+    isPending: isCancelling,
+    error: cancelError,
+  } = useWriteContract()
+  const {
+    isLoading: isCancelConfirming,
+    isSuccess: isCancelSuccess,
+    isError: isCancelReceiptError,
+    data: cancelReceipt,
+    refetch: refetchCancelReceipt,
+  } = useWaitForTransactionReceipt({ hash: cancelHash })
 
-  // Refresh chain state and notify parent after cancel confirms — no side-effects in render
   useEffect(() => {
     if (!isCancelSuccess) return
     void refetchLinkInfo()
     onCancelled()
   }, [isCancelSuccess, refetchLinkInfo, onCancelled])
 
-  const info = linkInfo as { balance: bigint; feeBalance: bigint; expiry: bigint; active: boolean } | undefined
-  const chainBalance = info?.balance ?? null
-  const chainFeeBalance = info?.feeBalance ?? null
-  const isActive = info ? info.active : true  // optimistic: assume active until chain says otherwise
-  const expiry = info ? Number(info.expiry) : link.expiryTs
-  const isExpired = expiry > 0 && expiry < nowSeconds()
-  const isDraft = !link.txHash
-  const isSpent = info ? !info.active && info.balance === 0n : false
+  // Retain confirmed chain data across background refetches; clear on scope change.
+  const info = linkInfo as ChainInfo | undefined
+  if (info !== undefined) {
+    retainedRef.current = { ...info, scopeKey }
+  }
+  const retained = retainedRef.current?.scopeKey === scopeKey ? retainedRef.current : null
+
+  // Use fresh data when available; fall back to retained during background refetch only.
+  const resolvedInfo: ChainInfo | null = info ?? (isFetching && retained ? retained : null)
+
+  // Cancel state machine
+  const isCancelReverted    = cancelReceipt?.status === "reverted"
+  const isCancelUnknown     = !!(cancelHash && isCancelReceiptError)
+  const cancelInFlight      = !!(isCancelling || (cancelHash && !isCancelSuccess && !isCancelReceiptError))
+  const cancelActionBlocked = isCancelling || isCancelConfirming || isCancelUnknown
+
+  const st = deriveLinkStatus({
+    hasTxHash: !isDraft,
+    chainInfo: resolvedInfo,
+    isLoading,
+    isFetching,
+    isError,
+    isCancelSuccess,
+    cancelInFlight,
+    nowSec: nowSeconds(),
+  })
 
   const linkUrl = buildLinkUrl(link.privateKey, contractAddress, ARC_TESTNET_CHAIN_ID)
-  const displayBalance = chainBalance !== null ? formatUsdcFixed(chainBalance) : link.principal
+  const chainBalance = resolvedInfo?.balance ?? null
+  const chainFeeBalance = resolvedInfo?.feeBalance ?? null
+  const expiry = resolvedInfo ? Number(resolvedInfo.expiry) : link.expiryTs
 
-  // Actions
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(linkUrl)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-    } catch { /* clipboard unavailable — silently ignore */ }
+    } catch { /* clipboard unavailable */ }
   }
 
   const handleCancel = () => {
@@ -97,44 +140,134 @@ export function LinkCard({ link, contractAddress, onCancelled }: LinkCardProps) 
     setConfirmCancel(false)
   }
 
-  // Derive status label and color from chain state
-  const statusLabel = !isActive
-    ? isSpent ? 'Spent' : 'Cancelled'
-    : isDraft ? 'Draft'
-      : isExpired ? 'Expired'
-        : formatExpiry(expiry)
+  // ── Draft ────────────────────────────────────────────────────────────────
+  if (st.phase === 'draft') {
+    return (
+      <div className="rounded-2xl p-4 space-y-3"
+        style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <p className="text-xl font-bold tabular-nums display" style={{ color: 'var(--subtle)' }}>
+              {link.principal} USDC
+            </p>
+            <p className="text-xs mt-0.5 mono" style={{ color: 'var(--subtle)' }}>
+              {truncateAddress(link.signerAddress)}
+            </p>
+          </div>
+          <span className="text-xs font-medium px-2 py-1 rounded-lg"
+            style={{ background: 'var(--surface-muted)', color: 'var(--muted)' }}>
+            Draft
+          </span>
+        </div>
+        <p className="text-xs" style={{ color: 'var(--muted)' }}>
+          Transaction pending — check your wallet to confirm.
+        </p>
+      </div>
+    )
+  }
 
-  const statusColor = !isActive
-    ? 'var(--subtle)'
-    : isDraft
-      ? 'var(--muted)'
-      : isExpired
-        ? 'var(--danger)'
-        : 'var(--success)'
+  // ── Loading skeleton ─────────────────────────────────────────────────────
+  if (st.phase === 'loading') {
+    return (
+      <div className="rounded-2xl p-4 space-y-3" aria-busy="true"
+        style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <div className="flex items-start justify-between gap-2">
+          <div className="space-y-1.5">
+            <div style={{ width: '120px', height: '28px', borderRadius: '6px', background: 'var(--surface-muted)' }}
+              aria-hidden="true" />
+            <div style={{ width: '80px', height: '14px', borderRadius: '4px', background: 'var(--surface-muted)' }}
+              aria-hidden="true" />
+          </div>
+          <div style={{ width: '60px', height: '24px', borderRadius: '6px', background: 'var(--surface-muted)' }}
+            aria-hidden="true" />
+        </div>
+        <p className="sr-only" role="status">Loading link…</p>
+      </div>
+    )
+  }
 
-  // Show cancel button when link is active (including expired — refund is possible)
-  const canCancel = isActive && !isCancelSuccess
-  // Show spend link only when active and NOT expired
-  const canShare = isActive && !isExpired && !isDraft
+  // ── Error, no retained data ──────────────────────────────────────────────
+  if (st.phase === 'error_no_data') {
+    return (
+      <div className="rounded-2xl p-4 space-y-3"
+        style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <p className="text-sm font-medium" style={{ color: 'var(--ink)' }}>
+              {truncateAddress(link.signerAddress)}
+            </p>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--danger)' }}>
+              Could not load link data.
+            </p>
+          </div>
+          <button type="button" onClick={() => { void refetchLinkInfo() }}
+            className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium"
+            style={{ background: 'var(--surface-muted)', color: 'var(--ink-2)', border: '1px solid var(--border)', minHeight: '36px' }}
+            aria-label="Retry loading link data">
+            <RefreshCw size={12} />
+            Retry
+          </button>
+        </div>
+        {link.txHash && (
+          <a href={buildTxExplorerUrl(ARC_TESTNET_CHAIN_ID, link.txHash)}
+            target="_blank" rel="noopener noreferrer"
+            className="flex items-center gap-1 text-xs" style={{ color: 'var(--subtle)' }}>
+            <ExternalLink size={11} />
+            View creation tx
+          </a>
+        )}
+      </div>
+    )
+  }
+
+  // ── Ready (chain data resolved or retained) ──────────────────────────────
+  const displayBalance = chainBalance !== null ? formatUsdcFixed(chainBalance) : null
 
   return (
     <div className="rounded-2xl p-4 space-y-3"
-      style={{ background: 'var(--surface)', border: '1px solid var(--border)', opacity: !isActive ? 0.6 : 1 }}>
+      style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+
       {/* Header row */}
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="text-xl font-bold tabular-nums display" style={{ color: 'var(--ink)' }}>
-            {displayBalance} USDC
+            {displayBalance !== null
+              ? `${displayBalance} USDC`
+              : <span style={{ color: 'var(--subtle)', fontSize: '0.85em' }}>— USDC</span>}
           </p>
           <p className="text-xs mt-0.5 mono" style={{ color: 'var(--subtle)' }}>
             {truncateAddress(link.signerAddress)}
           </p>
         </div>
-        <span className="text-xs font-medium px-2 py-1 rounded-lg"
-          style={{ background: 'var(--surface-muted)', color: statusColor }}>
-          {statusLabel}
-        </span>
+        <div className="flex flex-col items-end gap-1">
+          <span className="text-xs font-medium px-2 py-1 rounded-lg"
+            style={{ background: 'var(--surface-muted)', color: st.statusColor }}>
+            {st.statusLabel}
+          </span>
+          {st.showUpdating && (
+            <span className="text-xs" style={{ color: 'var(--subtle)' }}
+              role="status" aria-live="polite">
+              Updating…
+            </span>
+          )}
+          {st.showStaleNotice && (
+            <button type="button" onClick={() => { void refetchLinkInfo() }}
+              className="flex items-center gap-1 text-xs"
+              style={{ color: 'var(--muted)' }}
+              aria-label="Retry loading link data">
+              <RefreshCw size={11} />
+              Retry
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Stale data notice */}
+      {st.showStaleNotice && (
+        <p className="text-xs" style={{ color: 'var(--muted)' }} role="status" aria-live="polite">
+          Last known data — chain read failed. Financial actions disabled until refreshed.
+        </p>
+      )}
 
       {/* Fee budget */}
       {chainFeeBalance !== null && (
@@ -143,21 +276,51 @@ export function LinkCard({ link, contractAddress, onCancelled }: LinkCardProps) 
         </p>
       )}
 
-      {/* Expired-but-active notice */}
-      {isActive && isExpired && (
+      {/* Expired-but-active notice — only with confirmed fresh chain data, no cancel in flight */}
+      {st.showReclaimNotice && (
         <div className="rounded-lg px-3 py-2 text-xs"
           style={{ background: 'rgba(186,43,76,0.06)', border: '1px solid rgba(186,43,76,0.2)' }}>
           <p style={{ color: 'var(--danger)' }}>
-            This link has expired. Cancel it to reclaim the remaining {displayBalance} USDC + fee budget.
+            This link has expired.
+            {displayBalance !== null && displayBalance !== '0.00'
+              ? ` Cancel it to reclaim the remaining ${displayBalance} USDC + fee budget.`
+              : ' Cancel it to reclaim any remaining balance.'}
           </p>
         </div>
       )}
 
+      {/* Cancel state notices */}
+      {isCancelling && (
+        <p className="text-sm text-center" style={{ color: 'var(--subtle)' }} role="status" aria-busy="true">Waiting for wallet confirmation…</p>
+      )}
+      {!isCancelling && cancelInFlight && (
+        <p className="text-sm text-center" style={{ color: 'var(--subtle)' }} role="status" aria-busy="true">Cancellation pending…</p>
+      )}
+      {isCancelSuccess && (
+        <p className="text-sm text-center" style={{ color: 'var(--success)' }} role="status">Cancellation confirmed.</p>
+      )}
+      {isCancelReverted && (
+        <p className="text-sm text-center" style={{ color: 'var(--danger)' }} role="status">Cancellation reverted. Refresh and retry if needed.</p>
+      )}
+      {isCancelUnknown && (
+        <div className="text-sm text-center" style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'center' }}>
+          <p style={{ color: 'var(--warning)' }} role="status">Could not confirm cancellation status.</p>
+          <button type="button" onClick={() => void refetchCancelReceipt()}
+            className="underline" style={{ color: 'var(--subtle)' }}>Check status</button>
+        </div>
+      )}
+
+      {/* Closed notice */}
+      {st.isClosed && !isCancelSuccess && (
+        <p className="text-xs" style={{ color: 'var(--subtle)' }}>
+          This link is closed. No remaining balance.
+        </p>
+      )}
+
       {/* Action row */}
-      {canCancel && (
+      {st.canCancel && (
         <div className="flex items-center gap-2 pt-1 flex-wrap">
-          {/* Copy — only when spendable */}
-          {canShare && (
+          {st.canShare && (
             <button type="button" onClick={() => { void handleCopy() }}
               className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium"
               style={{ background: 'var(--surface-muted)', color: 'var(--ink-2)', border: '1px solid var(--border)', minHeight: '36px' }}>
@@ -165,9 +328,7 @@ export function LinkCard({ link, contractAddress, onCancelled }: LinkCardProps) 
               {copied ? 'Copied' : 'Copy link'}
             </button>
           )}
-
-          {/* Preview — only when spendable */}
-          {canShare && (
+          {st.canShare && (
             <a href={linkUrl} target="_blank" rel="noopener noreferrer"
               className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium"
               style={{ background: 'var(--surface-muted)', color: 'var(--ink-2)', border: '1px solid var(--border)', minHeight: '36px' }}>
@@ -175,14 +336,12 @@ export function LinkCard({ link, contractAddress, onCancelled }: LinkCardProps) 
               Preview
             </a>
           )}
-
-          {/* Cancel / refund */}
           {!confirmCancel ? (
             <button type="button" onClick={() => setConfirmCancel(true)}
               className="ml-auto flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium"
               style={{ color: 'var(--danger)', background: 'transparent', border: '1px solid rgba(186,43,76,0.2)', minHeight: '36px' }}>
               <Trash2 size={13} />
-              {isExpired ? 'Reclaim funds' : 'Cancel'}
+              {st.isExpired ? 'Reclaim funds' : 'Cancel'}
             </button>
           ) : (
             <div className="ml-auto flex items-center gap-2">
@@ -192,21 +351,21 @@ export function LinkCard({ link, contractAddress, onCancelled }: LinkCardProps) 
                 Keep
               </button>
               <button type="button" onClick={handleCancel}
-                disabled={isCancelling || isCancelConfirming}
+                disabled={cancelActionBlocked}
                 className="rounded-lg px-2 py-1.5 text-xs font-semibold disabled:opacity-50"
                 style={{ background: 'var(--danger)', color: '#fff', minHeight: '32px' }}
-                aria-busy={isCancelling || isCancelConfirming}>
-                {isCancelling ? 'Confirm…' : isCancelConfirming ? 'Cancelling…' : isExpired ? 'Reclaim' : 'Cancel link'}
+                aria-busy={cancelActionBlocked}>
+                {isCancelling ? 'Confirm in wallet…' : isCancelConfirming ? 'Cancelling…' : st.isExpired ? 'Reclaim' : 'Cancel link'}
               </button>
             </div>
           )}
         </div>
       )}
 
-      {/* Draft warning */}
-      {isDraft && isActive && (
-        <p className="text-xs" style={{ color: 'var(--muted)' }}>
-          Draft — transaction not yet confirmed. Check your wallet.
+      {/* Expiry — for active non-expired links */}
+      {st.isActive && !st.isExpired && expiry > 0 && (
+        <p className="text-xs" style={{ color: 'var(--subtle)' }}>
+          Expires: {formatExpiry(expiry)}
         </p>
       )}
 
@@ -226,7 +385,7 @@ export function LinkCard({ link, contractAddress, onCancelled }: LinkCardProps) 
           target="_blank" rel="noopener noreferrer"
           className="flex items-center gap-1 text-xs" style={{ color: 'var(--success)' }}>
           <ExternalLink size={11} />
-          {isCancelSuccess ? 'Cancel confirmed' : 'Cancel pending…'}
+          {isCancelSuccess ? 'Cancel confirmed' : isCancelUnknown ? 'Cancel tx (unconfirmed)' : 'Cancel pending…'}
         </a>
       )}
 
@@ -234,7 +393,7 @@ export function LinkCard({ link, contractAddress, onCancelled }: LinkCardProps) 
       {cancelError && (() => {
         const classified = classifyWriteError(cancelError)
         return (
-          <p className="text-xs" style={{ color: 'var(--danger)' }}>
+          <p className="text-xs" role="status" aria-live="polite" style={{ color: 'var(--danger)' }}>
             {classified.category === 'user_rejected'
               ? 'Cancel request dismissed.'
               : `Cancel failed: ${classified.message}`}

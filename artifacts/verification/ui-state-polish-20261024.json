@@ -1,0 +1,29 @@
+{
+  "generatedAt": "2026-10-24-v3",
+  "release": "ui-state-polish-v3-cancel-fix",
+  "changes": {
+    "LinkCard.tsx": [
+      "useWaitForTransactionReceipt now destructures isError, data, refetch.",
+      "cancelInFlight = isCancelling || (hash && !success && !receiptError).",
+      "cancelActionBlocked = isCancelling || isCancelConfirming || isCancelUnknown \u2014 disables button during wallet phase too.",
+      "Separate notices: wallet-confirm pending / tx pending / confirmed / reverted / unknown+retry.",
+      "'Check status' refetch button shown only on unknown receipt outcome.",
+      "Explorer link label distinguishes confirmed/unconfirmed/pending."
+    ]
+  },
+  "checks": {
+    "linkStatusTests": {
+      "pass": 12,
+      "fail": 0,
+      "note": "deriveLinkStatus pure fn \u2014 cancel phases handled in LinkCard directly"
+    },
+    "typecheck": {
+      "errors": 0
+    },
+    "viteBuild": {
+      "exitCode": 0,
+      "seconds": 18.74
+    }
+  },
+  "limits": "No browser/wallet/funded/camera coverage. deriveLinkStatus pure fn tested; LinkCard cancel phases verified by tsc only."
+}
