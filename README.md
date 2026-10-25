@@ -4,8 +4,8 @@
 
 Spendable USDC links on [Arc Mainnet](https://arc.io). The issuer connects a wallet, deposits USDC into a link, and shares its URL. The holder opens the link, scans the recipient's payment QR (or enters an address manually), and pays — without connecting a wallet. Cancel returns the unspent principal and remaining relay fee budget.
 
-**Live app:** [knowless-pi.vercel.app](https://knowless-pi.vercel.app)  
-**Relay health:** [knowless-pi.vercel.app/relay/health](https://knowless-pi.vercel.app/relay/health)  
+**Live app:** [www.knowless.xyz](https://www.knowless.xyz)  
+**Relay health:** [www.knowless.xyz/relay/health](https://www.knowless.xyz/relay/health)  
 **Repository:** [github.com/emeieiron/knowless](https://github.com/emeieiron/knowless)
 
 Built with [Arc Studio](https://studio.arc.io).
@@ -110,7 +110,7 @@ bun run contracts:test    # forge test
 
 ### Worker (Cloudflare)
 
-Public configuration is in [`wrangler.toml`](wrangler.toml). Key public variables:
+Public configuration defaults are in [`wrangler.toml`](wrangler.toml). For deployment on the custom domain, use:
 
 | Variable | Value |
 |---|---|
@@ -118,7 +118,7 @@ Public configuration is in [`wrangler.toml`](wrangler.toml). Key public variable
 | `RELAY_RPC_URL` | `https://rpc.drpc.mainnet.arc.io` |
 | `RELAY_CONTRACT_ADDRESS` | `0xd93F67D2735e3Af22E699D65AeAa6147Db2c9214` |
 | `RELAY_CCTP_ROUTER_ADDRESS` | `0x86Eb182052582D814C37A127a712353087BA759A` |
-| `ALLOWED_ORIGIN` | `https://knowless-pi.vercel.app` |
+| `ALLOWED_ORIGIN` | `https://www.knowless.xyz` |
 
 `RELAY_PRIVATE_KEY` is a Cloudflare secret and is never stored in the repository or frontend. Keep `.env*`, `server/.relay-key`, and transaction journals out of version control (covered by `.gitignore`).
 
