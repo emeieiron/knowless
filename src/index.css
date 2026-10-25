@@ -189,3 +189,438 @@ input[type="number"]::-webkit-outer-spin-button {
   margin: 0;
 }
 input[type="number"] { -moz-appearance: textfield; }
+
+/* ── Issuer dashboard theme (.iss-*) ───────────────────────────────────────
+   Scoped to the connected issuer shell only; never affects landing or payment
+   pages. Uses the same lime/ink/cream palette as LandingPage.tsx.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* Shell: lime canvas inside dark outer frame */
+/* ── Anton @font-face (global) ─────────────────────────────────────────────── */
+@font-face {
+  font-family: 'Anton';
+  src: url('./assets/fonts/Anton-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+.iss-shell, .iss-subview {
+  --bg: #dcff4f;
+  --surface: #f9f7f0;
+  --surface-strong: #f9f7f0;
+  --surface-muted: #eeebdf;
+  --ink: #0d1b2a;
+  --ink-2: #334155;
+  --muted: #536157;
+  --subtle: #536157;
+  --border: #0d1b2a;
+  --border-strong: #0d1b2a;
+  --accent: #0d1b2a;
+  --focus: #0d1b2a;
+}
+
+.iss-shell {
+  background: #0d1b2a;
+  min-height: 100dvh;
+  padding: 10px;
+}
+.iss-canvas {
+  background: #dcff4f;
+  border-radius: 18px;
+  min-height: calc(100dvh - 20px);
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+}
+
+/* Header */
+.iss-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 28px;
+  border-bottom: 2px solid #0d1b2a;
+}
+.iss-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+}
+.iss-brand-name {
+  font-family: 'Anton', Impact, sans-serif;
+  font-size: 1.25rem;
+  letter-spacing: 0.01em;
+  color: #0d1b2a;
+  text-transform: lowercase;
+}
+
+/* Custom wallet button */
+.iss-wallet-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #0d1b2a;
+  color: #dcff4f;
+  border: none;
+  border-radius: 10px;
+  padding: 9px 16px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 44px;
+  min-width: 44px;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+.iss-wallet-btn:hover { background: #1a3358; }
+.iss-wallet-btn:focus-visible { outline: 2px solid #0d1b2a; outline-offset: 2px; }
+.iss-wallet-addr {
+  font-family: 'JetBrains Mono', Menlo, monospace;
+  font-size: 0.75rem;
+  opacity: 0.85;
+  min-width: 0;
+  max-width: 45vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Main content area */
+.iss-main {
+  flex: 1;
+  padding: 28px 28px 32px;
+  max-width: 1100px;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* Page heading */
+.iss-heading {
+  font-family: 'Anton', Impact, sans-serif;
+  font-size: clamp(1.6rem, 3vw, 2.2rem);
+  letter-spacing: 0.01em;
+  color: #0d1b2a;
+  line-height: 1;
+  text-transform: uppercase;
+  margin: 0;
+}
+.iss-subhead {
+  font-size: 0.875rem;
+  color: #0d1b2a;
+  opacity: 0.7;
+  margin-top: 4px;
+}
+
+/* Action bar */
+.iss-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.iss-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #0d1b2a;
+  color: #dcff4f;
+  border: 2px solid #0d1b2a;
+  border-radius: 10px;
+  padding: 11px 22px;
+  font-size: 0.9375rem;
+  font-weight: 700;
+  cursor: pointer;
+  min-height: 48px;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+.iss-btn-primary:hover { background: #1a3358; border-color: #1a3358; }
+.iss-btn-primary:disabled { opacity: 1; cursor: default; }
+.iss-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #f9f7f0;
+  color: #0d1b2a;
+  border: 2px solid #0d1b2a;
+  border-radius: 10px;
+  padding: 11px 22px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 48px;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+.iss-btn-secondary:hover { background: #e8e4d8; }
+
+/* Links grid */
+.iss-links-section { display: flex; flex-direction: column; gap: 12px; }
+.iss-links-label {
+  font-family: 'Anton', Impact, sans-serif;
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #536157;
+  opacity: 1;
+}
+.iss-links-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr));
+  gap: 16px;
+}
+
+/* Link cards — cream with ink outline and offset shadow */
+.iss-card {
+  background: #f9f7f0;
+  border: 2px solid #0d1b2a;
+  border-radius: 14px;
+  box-shadow: 4px 4px 0 #0d1b2a;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.iss-card--closed { opacity: 1; } /* never dim */
+.iss-card--loading { background: #f0eeE6; }
+
+/* Card header row */
+.iss-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+.iss-card-amount {
+  font-family: 'Space Grotesk', sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.75rem;
+  line-height: 1;
+  color: #0d1b2a;
+  letter-spacing: 0.01em;
+  word-break: break-all;
+  font-weight: 700;
+}
+.iss-card-amount--muted { opacity: 1; color: #536157; }
+.iss-card-addr {
+  font-family: 'JetBrains Mono', Menlo, monospace;
+  font-size: 0.6875rem;
+  color: #536157;
+  opacity: 1;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 20ch;
+}
+.iss-card-badge {
+  flex-shrink: 0;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1.5px solid currentColor;
+}
+.iss-card-badge--active  { color: #1a8047; background: rgba(26,128,71,0.08); }
+.iss-card-badge--expired { color: #b45309; background: rgba(180,83,9,0.08); }
+.iss-card-badge--closed  { color: #536157; background: rgba(13,27,42,0.08); opacity: 1; }
+.iss-card-badge--draft   { color: #6b6580; background: rgba(107,101,128,0.08); }
+.iss-card-badge--updating{ color: #1a4870; background: rgba(26,72,112,0.08); }
+
+/* Card meta rows */
+.iss-card-meta { font-size: 0.75rem; color: #536157; opacity: 1; }
+.iss-card-notice {
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+.iss-card-notice--warn   { background: rgba(180,83,9,0.08);  color: #92400e; border: 1px solid rgba(180,83,9,0.2); }
+.iss-card-notice--danger { background: rgba(186,43,76,0.07); color: #9b1c3a; border: 1px solid rgba(186,43,76,0.2); }
+.iss-card-notice--success{ background: rgba(26,128,71,0.07); color: #1a5c33; border: 1px solid rgba(26,128,71,0.2); }
+.iss-card-notice--info   { background: rgba(13,27,42,0.05);  color: #0d1b2a; border: 1px solid rgba(13,27,42,0.12); }
+
+/* Card action row */
+.iss-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.iss-card-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 44px;
+  font-family: inherit;
+  border: 1.5px solid #0d1b2a;
+  background: #f9f7f0;
+  color: #0d1b2a;
+  transition: background 0.12s;
+  min-width: 44px;
+}
+.iss-card-btn:hover { background: #e8e4d8; }
+.iss-card-btn:disabled { opacity: 0.4; cursor: default; }
+.iss-card-btn--danger {
+  border-color: rgba(186,43,76,0.5);
+  color: #ba2b4c;
+  background: transparent;
+}
+.iss-card-btn--danger:hover { background: rgba(186,43,76,0.07); }
+.iss-card-btn--confirm {
+  background: #ba2b4c;
+  color: #fff;
+  border-color: #ba2b4c;
+}
+.iss-card-btn--confirm:hover { background: #9b1c3a; border-color: #9b1c3a; }
+
+/* Card link row */
+.iss-card-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.6875rem;
+  color: #536157;
+  opacity: 1;
+  text-decoration: none;
+  min-height: 44px;
+}
+.iss-card-link:hover { opacity: 0.8; text-decoration: underline; }
+
+/* Empty state */
+.iss-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 48px 0;
+  text-align: center;
+}
+.iss-empty-text { font-size: 0.875rem; color: #536157; opacity: 1; }
+
+/* Footer chip */
+.iss-footer-chip {
+  align-self: flex-start;
+  margin: 0 28px 20px;
+  background: rgba(13,27,42,0.08);
+  border: 1px solid rgba(13,27,42,0.15);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 0.6875rem;
+  color: #0d1b2a;
+  opacity: 0.6;
+}
+.iss-footer-chip code {
+  font-family: 'JetBrains Mono', Menlo, monospace;
+  font-size: 0.65rem;
+}
+
+/* Subview shell — create/fund/share */
+.iss-subview {
+  background: #0d1b2a;
+  min-height: 100dvh;
+  padding: 10px;
+}
+.iss-subview-canvas {
+  background: #dcff4f;
+  border-radius: 18px;
+  min-height: calc(100dvh - 20px);
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+}
+.iss-subview-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 24px;
+  border-bottom: 2px solid #0d1b2a;
+}
+.iss-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #0d1b2a;
+  color: #dcff4f;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 44px;
+  font-family: inherit;
+}
+.iss-back-btn:hover { background: #1a3358; }
+.iss-subview-title {
+  font-family: 'Anton', Impact, sans-serif;
+  font-size: 1.1rem;
+  letter-spacing: 0.03em;
+  color: #0d1b2a;
+  text-transform: uppercase;
+}
+.iss-subview-main {
+  flex: 1;
+  padding: 28px 24px 32px;
+  max-width: min(700px, calc(100% - 32px));
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* Skeleton */
+.iss-skel {
+  background: rgba(13,27,42,0.10);
+  border-radius: 8px;
+  animation: iss-pulse 1.4s ease-in-out infinite;
+}
+@keyframes iss-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .iss-skel { animation: none; }
+}
+
+/* Restoring skeleton uses same shell/canvas */
+.iss-restoring-main {
+  flex: 1;
+  padding: 28px 28px 32px;
+  max-width: 520px;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .iss-shell { padding: 6px; }
+  .iss-canvas { border-radius: 12px; min-height: calc(100dvh - 12px); }
+  .iss-header { padding: 12px 16px; }
+  .iss-main { padding: 20px 16px 28px; gap: 20px; }
+  .iss-heading { font-size: 1.4rem; }
+  .iss-subview { padding: 6px; }
+  .iss-subview-canvas { border-radius: 12px; min-height: calc(100dvh - 12px); }
+  .iss-subview-header { padding: 12px 16px; }
+  .iss-subview-main { padding: 24px; flex: 0 1 auto; width: calc(100% - 32px); max-width: 520px; margin: 28px auto 32px; background: #f9f7f0; border: 2px solid #0d1b2a; border-radius: 14px; box-shadow: 4px 4px 0 #0d1b2a; min-width: 0; }
+  .iss-footer-chip { margin: 0 16px 16px; }
+}
+@media (max-width: 480px) {
+  .iss-brand-name { font-size: 1.05rem; }
+  .iss-wallet-btn { padding: 9px 11px; font-size: 0.75rem; }
+  .iss-actions { flex-direction: column; }
+  .iss-btn-primary, .iss-btn-secondary { width: 100%; justify-content: center; }
+}

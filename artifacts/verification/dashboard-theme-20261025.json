@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-25",
+  "typecheck": "0 errors (unchanged TSX)",
+  "build": "exit 0, 18.78s",
+  "configSha256": "d6ebacd9572f75a01a3af524f535775d6afee0a91ed03653b12f5dd0a8cb9979",
+  "indexHtmlSha256": "b08df6e1c5fe603b635b98a18e453597c8ca64c4a717617f1ba6d39c5f0ecccb",
+  "cssAssertions": "PASS: original prefix intact, :root present, scoped vars present, .iss-subview-main present, no opacity>1, Space Grotesk on card amount, Anton @font-face present, 44px touch targets present",
+  "changedFiles": [
+    "src/components/IssuerDashboard.tsx",
+    "src/components/LinkCard.tsx",
+    "src/index.css",
+    "index.html",
+    "public/favicon.svg",
+    "public/favicon-32.png",
+    "public/favicon.ico"
+  ],
+  "scope": "index.css repaired: original global prefix restored byte-exact, PostCSS corrections applied to issuer suffix. No TSX or financial logic changes.",
+  "coverage": "Static PostCSS assertions + Vite build. No browser, wallet or funded transaction tests performed."
+}
